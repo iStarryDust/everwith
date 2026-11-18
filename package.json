@@ -1,7 +1,7 @@
 {
-  "name": "@istarry/spoon-mood",
-  "version": "0.3.0",
-  "description": "情绪状态插件（fork 自 dsh-fish-mood）：给 agent 一副会变化的心情 —— 36 种情绪带半衰期与掩饰能力，底色随作息起伏，关系暖度按人记账。附带 mood_now / mood_feel / mood_diary。",
+  "name": "@istarry/spoon-companion",
+  "version": "0.6.1",
+  "description": "让对话角色有自己的内心和声音：心情情绪随时间和对话自己演，回复一条一条发出来，能念出声（DeepSeek / 小米 MiMo），也能听得见——点麦克风说话，本地识别后直接发送。四块都能单独关。",
   "type": "module",
   "main": "plugin.js",
   "icon": "icon.svg",
@@ -14,12 +14,13 @@
   },
   "files": [
     "plugin.js",
-    "lib/",
-    "cordis.patch.yml",
+    "build.mjs",
+    "lib/*.js",
     "locale/*.json",
+    "cordis.patch.yml",
     "icon.svg",
-    "README.md",
-    "tools/"
+    "LICENSE",
+    "README.md"
   ],
   "dsh": {
     "bundle": {
@@ -27,7 +28,8 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-ui-chat"
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation"
       ],
       "platform": "web"
     }
@@ -36,14 +38,19 @@
     "node": ">=22.13.0"
   },
   "keywords": [
+    "dsh",
     "dsh-plugin",
     "deepseek-harness",
-    "dsh",
-    "mood",
     "emotion",
-    "affect",
+    "mood",
     "persona",
-    "agent-state"
+    "companion",
+    "chat",
+    "multi-turn",
+    "tts",
+    "asr",
+    "voice",
+    "speech"
   ],
   "repository": {
     "type": "git",
@@ -59,5 +66,22 @@
     "name": "dsh-fish-mood",
     "repository": "https://github.com/ChencLi819/dsh-fish-mood",
     "license": "MIT"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-chat": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "sherpa-onnx-node": "^1.13.6"
   }
 }
