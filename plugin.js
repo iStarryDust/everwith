@@ -193,10 +193,8 @@ export function apply(ctx, config = {}) {
         sessionId,
       }
     }
-    // fork 改动：原实现是 `会话 ${sessionId.slice(0, 8)}`，
-    // 但 DSH 的会话 id 形如 `session-30e8fa99-...`，前 8 个字符永远是
-    // `session-`，标签只会得到「会话 session-」，毫无信息量。
-    // 这里先剥掉 `session-` 前缀，再取 8 位真正的 id 片段。
+    // DSH 的会话 id 形如 `session-30e8fa99-...`：先剥掉 `session-` 前缀再取 8 位，
+    // 否则截出来的永远是 `session-`，标签没有信息量。
     const shortId = sessionId.replace(/^session-/, '').slice(0, 8)
     return { conv: sessionId, label: shortId ? `会话 ${shortId}` : '', peer: null, sessionId }
   }
@@ -406,7 +404,6 @@ export function apply(ctx, config = {}) {
       name: 'mood_now',
       description:
         '看自己现在什么心情:哪种情绪、多浓、为什么(评价),还有心情底色(愉快度/精力)、性格、身体(饿/困)、' +
-        // fork 改动:原文是「跟这个群/这个人处得怎么样」,群是 QQ 群聊场景,DSH 里只说「这个人」。
         '跟这个人处得怎么样、今天发生的小事、心里还记着的事。' +
         '想回答「你心情咋样」「你怎么了」,或者想先弄清自己现在该用什么语气,就用它。action=diag 是给自己排障用的。',
       parameters: {
