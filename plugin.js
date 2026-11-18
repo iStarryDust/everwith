@@ -18,7 +18,7 @@
 // 心跳(默认 10 分钟一次):情绪衰减 + 自己的小事 + 反刍 + 心情修复 + 深夜复盘。
 // 骰子只在心跳里抛 —— 提示词渲染函数每个模型步骤都会跑,在那儿抛骰子等于「一说话就过日子」。
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -58,6 +58,15 @@ const DEFAULTS = {
   heartbeat: { enabled: true, everyMinutes: 10, lifeChance: 0.1, minGapMinutes: 45, rumination: true, moodRepair: true, review: true },
   /** 自己记心情的配额:防止模型反复加码把情绪推上天(调研 §4) */
   feel: { maxPerHour: 4, maxPerDay: 12, maxJump: 25, cooldownMin: 2 },
+  /** 分条说话:一条消息=一次开口,模型想接着说就在末尾留 marker,插件等一会儿再让它开下一轮 */
+  multiTurn: {
+    enabled: true,
+    maxRounds: 3,
+    marker: '[[more]]',
+    charsPerSec: 15,
+    jitterMs: 800,
+    prompt: '继续。没有要说的就只回 <end>。',
+  },
   /** 性格基线覆盖,例如 { neuroticism: 70 } */
   traits: {},
 }
@@ -73,6 +82,14 @@ const TEXT_OUTPUT = {
   // 契约:render 必须返回 ContentBlock[](dsh-tools 的 ToolOutput.render 签名)
   render: (_args, value) => [{ type: 'text', text: String(value?.text ?? '') }],
 }
+
+// 分条说话:告诉模型怎么标记"还没说完"
+const MULTI_TURN_PROMPT = [
+  '【分条说话】',
+  '- 一条消息 = 一次开口。想接着说下一句,就在这条消息的最后单独写一行 `[[more]]`。',
+  '- `[[more]]` 是你的标记,读者不用管它。',
+  '- 说完了就别写。不要为了凑条数硬写。',
+].join('\n')
 
 export function mergeConfig(config = {}) {
   const merged = { ...DEFAULTS, ...config }
@@ -393,6 +410,87 @@ export function apply(ctx, config = {}) {
       order: 9800,
       text: stateSectionText,
     }), 'fish-mood: state section')
+
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:turns',
+      // 300:静态块,跟 rules 挨着放,对前缀缓存友好
+      order: 300,
+      text: () => (settings.multiTurn?.enabled !== false ? MULTI_TURN_PROMPT : ''),
+    }), 'fish-mood: turns section')
+  })
+
+  // ── 分条说话 ────────────────────────────────────────────────────────────
+  // 一条消息 = 一次开口。模型想接着说下一句,就在这条末尾留一行 [[more]];
+  // 一轮说完(agent 进入 idle)时插件检查一次,有标记就等一会儿让它开下一轮。
+  // 每轮是一个新回合,界面上是分开的 —— 这就是"多说几条"。
+  ctx.inject(['agents'], (scope) => {
+    const turns = settings.multiTurn ?? {}
+    if (turns.enabled === false) return
+    const maxRounds = Math.max(1, Number(turns.maxRounds) || 3)
+    const marker = String(turns.marker || '[[more]]')
+    const perSec = Math.max(1, Number(turns.charsPerSec) || 15)
+    const jitter = Math.max(0, Number(turns.jitterMs) || 0)
+    const continueText = String(turns.prompt || '继续。')
+    /** 每个会话连了几轮(含第一轮)。说完就清掉。 */
+    const counted = new Map()
+
+    scope.effect(() => {
+      const off = scope.on('agent/status', ({ agent, status }) => {
+        if (status !== 'idle') return
+        try {
+          const session = agent?.session
+          if (!session) return
+          const key = String(session.id ?? '')
+
+          // 找这一轮最后一条有正文的 assistant 消息
+          const events = sessionEventsOf(session)
+          let lastText = ''
+          for (let i = events.length - 1; i >= 0; i--) {
+            const ev = events[i]
+            if (ev?.type !== 'assistant/message') continue
+            const content = ev.data?.message?.content
+            if (!Array.isArray(content)) continue
+            const joined = content.filter((x) => x?.type === 'text').map((x) => x.text).join('')
+            if (!joined.trim()) continue
+            lastText = joined
+            break
+          }
+          if (!lastText) { counted.delete(key); return }
+
+          const used = counted.get(key) ?? 1
+          if (!lastText.includes(marker) || used >= maxRounds) {
+            counted.delete(key)
+            return
+          }
+          counted.set(key, used + 1)
+
+          // 按上一段字数模拟"说完了再开口"的间隔
+          const plain = lastText.split(marker).join('').trim()
+          const typing = (plain.length / perSec) * 1000
+          const wait = Math.min(8000, Math.round(typing + Math.random() * jitter))
+
+          setTimeout(() => {
+            try {
+              agent.followup({
+                id: randomUUID(),
+                role: 'user',
+                content: [{ type: 'text', text: continueText }],
+                source: { kind: 'companion', round: used + 1 },
+              })
+            } catch (error) {
+              counted.delete(key)
+              log('warn', `分条说话:续说失败(${error instanceof Error ? error.message : String(error)})`)
+            }
+          }, wait)
+        } catch (error) {
+          log('warn', `分条说话:判断出错(已跳过)${error instanceof Error ? error.message : String(error)}`)
+        }
+      })
+      return () => {
+        counted.clear()
+        off()
+      }
+    }, 'fish-mood: multi-turn')
   })
 
   // ── 工具 ────────────────────────────────────────────────────────────────
