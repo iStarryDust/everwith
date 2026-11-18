@@ -45,6 +45,8 @@ const DEFAULTS = {
   promptEnabled: true,
   /** 状态块里每次重述的身份句(抗长会话漂移);空 = 用 lib/prompt.js 的默认文案 */
   identity: '',
+  /** 「说话用 say」那段提示词;空 = 用 SAY_PROMPT_TEXT */
+  sayPrompt: '',
   /**
    * 往哪些会话注入心情。
    * qq  = QQ 机器人(入站消息没有 rpcId);
@@ -73,6 +75,14 @@ const TEXT_OUTPUT = {
   // 契约:render 必须返回 ContentBlock[](dsh-tools 的 ToolOutput.render 签名)
   render: (_args, value) => [{ type: 'text', text: String(value?.text ?? '') }],
 }
+
+// say 工具:把「一次开口」落成一次工具调用,同回合内多开一个 step。
+const SAY_PROMPT_TEXT = [
+  '【说话 · 用嘴】',
+  '- 说话用 `say` 工具:一次调用就是一条消息。',
+  '- 想说三句就调三次 `say`;只想说一句,调一次就够。',
+  '- 每次只放这一句。不要把整段话塞进一次调用里。',
+].join('\n')
 
 export function mergeConfig(config = {}) {
   const merged = { ...DEFAULTS, ...config }
@@ -388,6 +398,12 @@ export function apply(ctx, config = {}) {
       text: rulesSectionText,
     }), 'fish-mood: rules section')
     scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:say',
+      // 200:跟 rules 挨着 —— 都是静态块,连着放对前缀缓存友好
+      order: 200,
+      text: () => String(settings.sayPrompt ?? '').trim() || SAY_PROMPT_TEXT,
+    }), 'fish-mood: say section')
+    scope.effect(() => scope.systemPrompt.section({
       name: 'fish-mood:now',
       // 9800:整段提示词的最后(9900 是结构化输出)。放最后是为了少打断前缀缓存
       order: 9800,
@@ -606,6 +622,41 @@ export function apply(ctx, config = {}) {
         rows = rows.slice(-limit)
         if (!rows.length) return { text: query ? `(最近 ${days} 天里没找到「${query}」)` : `(最近 ${days} 天没记什么)` }
         return { text: `最近 ${days} 天,记了 ${rows.length} 条:\n${renderDiary(rows)}` }
+      },
+    })
+
+    // ── 嘴 ────────────────────────────────────────────────────────────────
+    // 一条消息 = 一次开口。想分几条发,就调几次。
+    // 工具本身不做事:它只是把这句话落成一次独立的工具调用,
+    // 于是 DSH 会为它开一个新的 step —— 界面上就多一段。
+    tools.register({
+      name: 'say',
+      description:
+        '用嘴说一句话。一次调用 = 一条消息。\n' +
+        '想连着发三条,就调三次;只想说一句,调一次就够。\n' +
+        '每次只放这一句,不要在一次调用里塞整段话。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '这一句要说的话(一次开口的内容)' },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      },
+      output: {
+        schema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+          additionalProperties: false,
+        },
+        // 把说的话原样交回去 —— 渲染层会把它当成正文显示。
+        render: (_args, value) => [{ type: 'text', text: String(value?.text ?? '') }],
+      },
+      async execute(args) {
+        const text = String(args?.text ?? '').trim()
+        if (!text) return { text: '' }
+        return { text }
       },
     })
   }
