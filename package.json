@@ -1,6 +1,6 @@
 {
   "name": "@istarry/spoon-mood",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "情绪状态插件（fork 自 dsh-fish-mood）：给 agent 一副会变化的心情 —— 36 种情绪带半衰期与掩饰能力，底色随作息起伏，关系暖度按人记账。附带 mood_now / mood_feel / mood_diary。",
   "type": "module",
   "main": "plugin.js",
