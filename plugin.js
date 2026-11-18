@@ -85,16 +85,14 @@ const TEXT_OUTPUT = {
 
 // 分条说话:告诉模型怎么标记"还没说完"
 const MULTI_TURN_PROMPT = [
-  '【分条说话】',
-  '一条消息 = 一次开口。像是在手机上打字,不是写小说。',
+  '【说话 · 分条】',
+  '一条消息 = 一次开口。',
   '',
-  '- 想接着说下一句,就在这条消息的最后单独一行写 `<!--more-->`。它不会显示出来。',
-  '- **一条只说一件事**。两个意思就分两条,不要挤在一条里换行。',
-  '- **多数字只说话**:直接说「哥哥怎么这么晚才来」,不要在前面垫一长串动作。',
-  '- 身体细节偶尔补一条就够,而且短 —— 「(把椅子挪近了点)」,不是「(盘腿坐在椅子上,裙子摊开,脚踝搭在椅沿上晃)」。',
-  '- **不要重复上一条的意思**。第二条要是新的,不是把第一条换个说法。',
-  '- 没话说了就别写 `<!--more-->`。为了凑条数硬接,比不说话更难看。',
-  '- 一般 1~3 条。话没那么多的时候,一条就够。',
+  '想接着说下一句,在末尾单独一行写 <!--more-->;不写,就是这条说完了。',
+  '',
+  '- 一条只说一件事。',
+  '- 说完就停,别硬凑。',
+  '- 分几条由内容决定,不固定。',
 ].join('\n')
 
 export function mergeConfig(config = {}) {
@@ -440,6 +438,36 @@ export function apply(ctx, config = {}) {
     /** 每个会话连了几轮(含第一轮)。说完就清掉。 */
     const counted = new Map()
 
+    /**
+     * 这一轮给几次机会、间隔多松 —— 由当前情绪决定。
+     * 情绪不改说什么,只改"说几句"和"隔多久"。
+     */
+    const emotionBudget = () => {
+      const k = String(state.emotion?.key ?? 'calm')
+      const intensity = Number(state.emotion?.intensity) || 0
+      let rounds = maxRounds
+      let speed = 1
+
+      // 情绪够浓才起作用,淡淡的就按默认走
+      if (intensity >= 26) {
+        if (k === 'excited' || k === 'happy' || k === 'playful' || k === 'amused') {
+          rounds = Math.max(rounds, 4)
+          speed = 0.7 // 急,接得快
+        } else if (
+          k === 'sad' || k === 'down' || k === 'lonely' || k === 'disappointed' ||
+          k === 'wronged' || k === 'tired' || k === 'sleepy'
+        ) {
+          rounds = 1 // 不想多话
+        }
+      }
+      // 想说出去的时候,多给一次
+      if (state.urges?.kind === 'share' && Number(state.urges.until) > Date.now()) {
+        rounds = Math.max(rounds, 4)
+        speed = Math.min(speed, 0.85)
+      }
+      return { rounds, speed, maxWaitMs: 8000 }
+    }
+
     scope.effect(() => {
       const off = scope.on('agent/status', ({ agent, status }) => {
         if (status !== 'idle') return
@@ -463,17 +491,23 @@ export function apply(ctx, config = {}) {
           }
           if (!lastText) { counted.delete(key); return }
 
+          // 只看最后一行 —— 正文里提到标记不算
+          const tail = (lastText.trimEnd().split('\n').pop() ?? '').trim()
+          if (tail !== marker) { counted.delete(key); return }
+
+          // 情绪决定"给几次机会"和"间隔松紧"
+          const mood = emotionBudget()
           const used = counted.get(key) ?? 1
-          if (!lastText.includes(marker) || used >= maxRounds) {
-            counted.delete(key)
-            return
-          }
+          if (used >= mood.rounds) { counted.delete(key); return }
           counted.set(key, used + 1)
 
           // 按上一段字数模拟"说完了再开口"的间隔
           const plain = lastText.split(marker).join('').trim()
           const typing = (plain.length / perSec) * 1000
-          const wait = Math.min(8000, Math.round(typing + Math.random() * jitter))
+          const wait = Math.min(
+            mood.maxWaitMs,
+            Math.round((typing + Math.random() * jitter) * mood.speed),
+          )
 
           setTimeout(() => {
             try {
