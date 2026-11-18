@@ -19,6 +19,9 @@
 // 骰子只在心跳里抛 —— 提示词渲染函数每个模型步骤都会跑,在那儿抛骰子等于「一说话就过日子」。
 
 import { createHash, randomUUID } from 'node:crypto'
+import * as voicePlugin from './lib/voice.js'
+import { applyAsrRoutes } from './lib/asr-route.js'
+import { isVoiceActive } from './lib/asr.js'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -33,7 +36,8 @@ import { RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection } from './
 
 export const name = 'fish-mood'
 /** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
-export const inject = ['tools']
+// tools/agents: 情绪与分条说话；webServer/systemPrompt: 语音宿主（路由 + 提示词段落）
+export const inject = ['tools', 'agents', 'webServer', 'systemPrompt']
 
 /** 用来确认「正在跑的是哪一版」:热重载有延迟,diag 里会打出来 */
 const PLUGIN_REV = '2026-11-02.4'
@@ -59,13 +63,22 @@ const DEFAULTS = {
   /** 自己记心情的配额:防止模型反复加码把情绪推上天(调研 §4) */
   feel: { maxPerHour: 4, maxPerDay: 12, maxJump: 25, cooldownMin: 2 },
   /** 分条说话:一条消息=一次开口,模型想接着说就在末尾留 marker,插件等一会儿再让它开下一轮 */
+  /**
+   * 通话模式：消息里带前缀（比如「--当前正在实时语音通话-- 喂」）就切换成说话的口气。
+   * 语音识别把话转成文字发过来时，模型分不清这是"说"还是"打" —— 于是照常写
+   * Markdown、长长一段、还爱总结。通话模式就是把这个差别告诉它。
+   */
+  callMode: {
+    enabled: true,
+    prompt: '',
+  },
   multiTurn: {
     enabled: true,
     maxRounds: 3,
     marker: '<!--more-->',
     charsPerSec: 15,
     jitterMs: 800,
-    prompt: '<continue>接着上一条,说下一句。说完了就停,别硬凑。</continue>',
+    prompt: '<continue>（刚才那条已经发出去了。想再说一句就接着发,不用重新开头;没什么好说的就放着。）</continue>',
   },
   /** 性格基线覆盖,例如 { neuroticism: 70 } */
   traits: {},
@@ -84,6 +97,10 @@ const TEXT_OUTPUT = {
 }
 
 // 分条说话:告诉模型怎么标记"还没说完"
+// 通话模式：把"这是语音"这件事说清楚。
+// 注意不要再写「语气用标签」这类规则 —— 语音格式那一段已经管了。
+const CALL_PROMPT = '现在是语音通话:回短句、口语,不用排版符号。'
+
 const MULTI_TURN_PROMPT = [
   '【像微信一样说话】',
   '聊天窗口,一条一句。',
@@ -369,11 +386,134 @@ export function apply(ctx, config = {}) {
   }
 
   // ── 系统提示词 ──────────────────────────────────────────────────────────
+  /**
+ * 这个会话现在是不是在通话。
+ *
+ * 判据：最后一条用户消息里带着通话前缀。带就是通话中，不带就是挂断。
+ * 不用超时 —— 不打字时没有新消息，状态自然保持；一旦打字（不带前缀），
+ * 下一条就自动退出。这比计时更贴近「实时开/挂」。
+ */
+  /**
+   * 这个会话现在是不是在通话。
+   *
+   * 判据：最后一条用户消息里带着通话前缀。带就是通话中，不带就是挂断。
+   * 不用超时 —— 不打字时没有新消息，状态自然保持；一旦打字（不带前缀），
+   * 下一条就自动退出。这比计时更贴近「实时开/挂」。
+   */
+  /**
+   * 正在通话的会话。
+   *
+   * 由客户端那个通话按钮通过 POST /api/spoon-companion/call 写进来，
+   * 点一下接通、再点一下挂断 —— 真正的"实时开/挂"，不靠消息前缀也不靠超时。
+   * 只放内存：通话是短时状态，重启就该断开，不需要持久化。
+   */
+  const callSessions = new Set()
+  /**
+   * 不分会话的总开关。客户端按钮拿不到 sessionId 时就走这个 ——
+   * 单会话场景下够用，多会话时各会话互不影响。
+   */
+  let callGlobal = false
+  /** 最近一次开关请求的原始 body，排查用（会通过 GET 暴露） */
+  let lastCallBody = null
+
+  /** 客户端按钮的开关通道。挂不上不影响别的，只是按钮没反应。 */
+  ctx.effect(() => {
+    const webServer = ctx.webServer ?? ctx.get('webServer')
+    if (!webServer?.register) return undefined
+    const reply = (res, code, payload) => {
+      try {
+        res.statusCode = code
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify(payload))
+      } catch { /* ignore */ }
+    }
+    // 刷新页面后按钮要知道当前状态
+    const statusRoute = {
+      method: 'GET',
+      path: '/api/spoon-companion/call',
+      handler: async (_req, res) => {
+        const query = String(_req?.url ?? '')
+        const m = /[?&]sessionId=([^&]+)/.exec(query)
+        const id = m ? decodeURIComponent(m[1]) : ''
+        const on = callGlobal || (id ? callSessions.has(id) : false)
+        reply(res, 200, { ok: true, on, lastBody: lastCallBody, global: callGlobal })      },
+    }
+    const route = {
+      method: 'POST',
+      path: '/api/spoon-companion/call',
+      handler: async (req, res) => {
+        try {
+          let raw = ''
+          for await (const chunk of req) raw += chunk
+          const body = raw ? JSON.parse(raw) : {}
+          log('info', `通话开关收到: ${JSON.stringify(body)}`)
+          lastCallBody = body
+          const id = String(body.sessionId ?? '')
+          // 没有 sessionId 就当作全局开关（客户端拿不到会话标识时的兜底）
+          if (!id) {
+            const on = body.on !== false
+            callGlobal = on
+            reply(res, 200, { ok: true, on, scope: 'global' })
+            return
+          }
+          if (body.on === false) callSessions.delete(id)
+          else callSessions.add(id)
+          reply(res, 200, { ok: true, on: callSessions.has(id) })
+        } catch (error) {
+          reply(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    }
+    try {
+      const disposers = []
+      disposers.push(webServer.register(statusRoute))
+      disposers.push(webServer.register(route))
+      return () => { for (const d of disposers) { try { d?.() } catch { /* ignore */ } } }
+    } catch (error) {
+      log('warn', `通话按钮通道注册失败:${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }, 'spoon-companion: call route')
+
+  const callSectionText = (context) => {
+    try {
+      const cfg = settings.callMode ?? {}
+      if (cfg.enabled === false) return ''
+      if (settings.promptEnabled === false) return ''
+      const session = sessionOf(context)
+      if (!session) return ''
+      const id = String(session.id ?? '')
+      // 三条任意一条成立就算在通话：
+      //   1. 最近几秒真的在往这儿送音频 —— 最可靠，不依赖客户端另外通知，
+      //      麦克风一停就自然退出
+      //   2. 客户端报了全局开关
+      //   3. 这个会话被单独标过
+      let voiceActive = false
+      try {
+        voiceActive = isVoiceActive()
+      } catch {
+        voiceActive = false
+      }
+      if (!voiceActive && !callGlobal && !(id && callSessions.has(id))) return ''
+      return String(cfg.prompt ?? '').trim() || CALL_PROMPT
+    } catch {
+      return ''
+    }
+  }
+
   const channelOf = (context) => {
-    const agent = context?.agent ?? context?.scope ?? null
-    const session = sessionOf(context)
-    if (!session) return null
-    return channelOfSession(session, { hasQqbot: hasQqbotTool(agent) })
+    try {
+      const agent = context?.agent ?? context?.scope ?? null
+      const session = sessionOf(context)
+      if (!session) return null
+      const channel = channelOfSession(session, { hasQqbot: hasQqbotTool(agent) })
+      // 会话里还没有可读的用户消息时 channelOfSession 会返回 unknown，
+      // 而 channels.unknown 默认是关的 —— 那样 rules/now 两段会整段变成空，
+      // 表现出来就是"这个会话里插件好像没了"。判不出来就按 web 算。
+      return channel === 'unknown' ? 'web' : channel
+    } catch {
+      return null
+    }
   }
 
   /** 静态规则块:字节级不变(它在前缀里,一变缓存就废) */
@@ -421,10 +561,20 @@ export function apply(ctx, config = {}) {
 
     scope.effect(() => scope.systemPrompt.section({
       name: 'fish-mood:turns',
-      // 300:静态块,跟 rules 挨着放,对前缀缓存友好
+      // 300:放在前段,别往末尾挤。
+      // 试过挪到 9870(紧贴对话),结果连续说话完全不触发了 ——
+      // 这段是"怎么写"的格式要求,不是"现在是什么状态",
+      // 混到最后反而和语音格式那段打架。状态类的才该靠后。
       order: 300,
       text: () => (settings.multiTurn?.enabled !== false ? MULTI_TURN_PROMPT : ''),
     }), 'fish-mood: turns section')
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:call',
+      // 9890:压在所有块之后,紧贴对话 —— 通话时"回短句"这条最容易被无视,
+      // 离得越近越管用。(9900 留给结构化输出,别占)
+      order: 9890,
+      text: callSectionText,
+    }), 'fish-mood: call section')
   })
 
   // ── 分条说话 ────────────────────────────────────────────────────────────
@@ -435,7 +585,10 @@ export function apply(ctx, config = {}) {
     const turns = settings.multiTurn ?? {}
     if (turns.enabled === false) return
     const maxRounds = Math.max(1, Number(turns.maxRounds) || 3)
-    const marker = String(turns.marker || '[[more]]')
+    // 兜底值必须和提示词里写的标记一致。
+    // 原来兜底是 [[more]]，提示词写 <!--more-->，一旦 settings 没带上 marker 就永远匹配不上。
+    const marker = String(turns.marker || '<!--more-->')
+    log('info', `分条说话:启用 marker=${JSON.stringify(marker)} maxRounds=${maxRounds} perSec=${Number(turns.charsPerSec) || 15}`)
     const perSec = Math.max(1, Number(turns.charsPerSec) || 15)
     const jitter = Math.max(0, Number(turns.jitterMs) || 0)
     const continueText = String(turns.prompt || '继续。')
@@ -477,7 +630,10 @@ export function apply(ctx, config = {}) {
         if (status !== 'idle') return
         try {
           const session = agent?.session
-          if (!session) return
+          if (!session) {
+            log('warn', '分条说话:idle 时拿不到 session（分叉/编辑重开的会话可能走过这里）')
+            return
+          }
           const key = String(session.id ?? '')
 
           // 找这一轮最后一条有正文的 assistant 消息
@@ -495,9 +651,20 @@ export function apply(ctx, config = {}) {
           }
           if (!lastText) { counted.delete(key); return }
 
-          // 只看最后一行 —— 正文里提到标记不算
+          // 认两种：①末尾正好是标记　②标记出现在最后 120 字符内
+          // 只用①的话，模型在标记后多打一个标点就会漏判，静默不续说。
           const tail = (lastText.trimEnd().split('\n').pop() ?? '').trim()
-          if (tail !== marker) { counted.delete(key); return }
+          const nearTail = lastText.trimEnd().slice(-120)
+          const hasMarker = tail === marker || nearTail.includes(marker)
+          if (!hasMarker) {
+            // 打出来才知道是"模型没写标记"还是"标记被吃了"
+            log(
+              'info',
+              `分条说话:末尾不是标记(session=${key.slice(0, 18)} tail=${JSON.stringify(tail.slice(0, 30))})`,
+            )
+            counted.delete(key)
+            return
+          }
 
           // 情绪决定"给几次机会"和"间隔松紧"
           const mood = emotionBudget()
@@ -770,6 +937,18 @@ export function apply(ctx, config = {}) {
       clearTimeout(first)
       clearInterval(timer)
     }, 'fish-mood: heartbeat')
+  }
+
+  // ── 语音 ────────────────────────────────────────────────────────────────
+  // 由 companion-voice 合并进来：注册 /api/companion-voice/* 路由、语音提示词段落、
+  // 以及与客户端的播放通道。它自己管自己的 ctx.effect，挂不上也不该拖垮情绪系统。
+  try {
+    // 语音识别：客户端录音 → 本地 sherpa-onnx → 文字。挂不上不影响朗读。
+    ctx.effect(() => applyAsrRoutes(ctx, log), 'spoon-companion: asr routes')
+
+    voicePlugin.apply(ctx)
+  } catch (error) {
+    log('warn', `语音半边挂载失败（情绪系统继续工作）:${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
