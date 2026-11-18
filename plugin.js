@@ -1,0 +1,637 @@
+// dsh-fish-mood —— 给 agent 一副会变化的心情:情绪有半衰期,心情影响说话方式。
+//
+// 三层结构(细节在 lib/):
+//   性格 traits  → 心情 mood → 情绪 emotion
+//   周~月的设定    这几小时的底色   刚刚发生的事
+//
+// 这一层负责:往系统提示词里挂两块、注册三个工具、跑心跳、判会话身份。
+//
+// 两块提示词(拆开是为了提示缓存友好:静态段字节不变,实时段固定在最后):
+//   fish-mood:rules  order 100  —— 静态规则,字节级不变(提示缓存友好)
+//   fish-mood:now    order 9800 —— 实时状态块,固定模板,放在整段提示词的最后
+//
+// 三个工具:
+//   mood_now   看自己现在什么心情(三层 + 为什么 + 关系 + 记忆)
+//   mood_feel  记一笔心情 —— 注意是**申请**:引擎有配额、冷却、饱和,会把「实际生效多少」回给你
+//   mood_diary 翻日记 / 写心里话 / 复盘
+//
+// 心跳(默认 10 分钟一次):情绪衰减 + 自己的小事 + 反刍 + 心情修复 + 深夜复盘。
+// 骰子只在心跳里抛 —— 提示词渲染函数每个模型步骤都会跑,在那儿抛骰子等于「一说话就过日子」。
+
+import { createHash } from 'node:crypto'
+import { appendFileSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { EMOTION_KEYS, EMOTION_MENU, TRAITS, resolveEmotion, tierOf } from './lib/catalog.js'
+import { appraise } from './lib/appraise.js'
+import {
+  applyImpulse, catharsis, circadian, decay, dueRumination, loadState, maybeLifeEvent, maybeMoodRepair,
+  nightlyReview, pruneState, remember, saveState, snapshot,
+} from './lib/state.js'
+import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
+import { RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection } from './lib/prompt.js'
+
+export const name = 'fish-mood'
+/** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
+export const inject = ['tools']
+
+/** 用来确认「正在跑的是哪一版」:热重载有延迟,diag 里会打出来 */
+const PLUGIN_REV = '2026-11-02.4'
+/** 情绪淡到这儿以下就当没有了(和 lib/catalog.js 的 FADE_OUT 一致) */
+const FADE_OUT_LEVEL = 6
+
+const DEFAULTS = {
+  stateDir: '',
+  promptEnabled: true,
+  /** 状态块里每次重述的身份句(抗长会话漂移);空 = 用 lib/prompt.js 的默认文案 */
+  identity: '',
+  /**
+   * 往哪些会话注入心情。
+   * qq  = QQ 机器人(入站消息没有 rpcId);
+   * web = Web/桌面(有 rpcId)—— 默认一起给;只用 Web 处理其他工作时可以关掉。
+   * unknown = 判不出来时:装了 qqbot 工具就当 QQ。
+   */
+  channels: { qq: true, web: true, unknown: false },
+  /** 情绪冲量:从会话消息里读「刚发生了什么」 */
+  react: { enabled: true, maxPerTurn: 2, cooldownMin: 4, strongCooldownMin: 2, freshMinutes: 15 },
+  /** 心跳:衰减 + 自己的小事 + 反刍 + 心情修复 + 深夜复盘 */
+  heartbeat: { enabled: true, everyMinutes: 10, lifeChance: 0.1, minGapMinutes: 45, rumination: true, moodRepair: true, review: true },
+  /** 自己记心情的配额:防止模型反复加码把情绪推上天(调研 §4) */
+  feel: { maxPerHour: 4, maxPerDay: 12, maxJump: 25, cooldownMin: 2 },
+  /** 性格基线覆盖,例如 { neuroticism: 70 } */
+  traits: {},
+}
+
+/** 工具输出统一成 { text }:模型看 render,程序调用方拿规范值,两边一致 */
+const TEXT_OUTPUT = {
+  schema: {
+    type: 'object',
+    properties: { text: { type: 'string' } },
+    required: ['text'],
+    additionalProperties: false,
+  },
+  // 契约:render 必须返回 ContentBlock[](dsh-tools 的 ToolOutput.render 签名)
+  render: (_args, value) => [{ type: 'text', text: String(value?.text ?? '') }],
+}
+
+export function mergeConfig(config = {}) {
+  const merged = { ...DEFAULTS, ...config }
+  merged.channels = { ...DEFAULTS.channels, ...(config.channels ?? {}) }
+  merged.react = { ...DEFAULTS.react, ...(config.react ?? {}) }
+  merged.heartbeat = { ...DEFAULTS.heartbeat, ...(config.heartbeat ?? {}) }
+  merged.feel = { ...DEFAULTS.feel, ...(config.feel ?? {}) }
+  merged.traits = { ...(config.traits ?? {}) }
+  return merged
+}
+
+export function apply(ctx, config = {}) {
+  const settings = mergeConfig(config)
+  const stateDir = settings.stateDir || join(homedir(), '.dsh', 'fish-mood')
+  const log = (level, text) => {
+    try {
+      const logger = ctx.logger ?? ctx.get?.('logger')
+      if (logger && typeof logger[level] === 'function') logger[level](text)
+      else console.log(`[fish-mood] ${text}`)
+    } catch {
+      /* 日志失败不连坐 */
+    }
+  }
+
+  /** 内存里一份账本:多会话并发时不会互相踩;写盘走原子写 */
+  let state = loadState(stateDir)
+  for (const [key, value] of Object.entries(settings.traits)) {
+    if (TRAITS.some((trait) => trait.key === key) && Number.isFinite(Number(value))) state.traits[key] = Number(value)
+  }
+  const commit = () => {
+    pruneState(state)
+    return saveState(stateDir, state)
+  }
+
+  /** 审计日志:每次情绪变动都留一行,用来复盘「有没有单调上升不回落」(调研 §4) */
+  const audit = (entry) => {
+    try {
+      appendFileSync(join(stateDir, 'audit.jsonl'), `${JSON.stringify({ at: Date.now(), rev: PLUGIN_REV, ...entry })}\n`)
+    } catch {
+      /* 写不进去不影响插件 */
+    }
+  }
+
+  /**
+   * 启动痕迹:证明「这一版真的被加载了」。
+   * 桌面端把宿主 stdout 收走,而热重载又可能命中 ESM 缓存(重新 apply 了旧模块),
+   * 所以只有落盘的一行字算数 —— fish-feed 给 qqbot 打补丁时也是这么确认的。
+   */
+  try {
+    appendFileSync(join(stateDir, 'load.log'), `${new Date().toISOString()} rev ${PLUGIN_REV} pid ${process.pid} node ${process.versions.node}\n`)
+  } catch {
+    /* 写不进去不影响插件 */
+  }
+
+  // ── 会话 → 会话键 / 会话身份 ─────────────────────────────────────────────
+  /** qqbot 的会话管理器:正规服务 + 进程级后门(fish-feed 踩过的两条路) */
+  const sessionManager = () => {
+    try {
+      const viaCtx = ctx.get('qqbot-sessions')
+      if (viaCtx) return viaCtx
+    } catch {
+      /* 服务不可见,试后门 */
+    }
+    try {
+      return globalThis[Symbol.for('dsh.qqbot-sessions')] ?? undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 和 dsh-qqbot 的 SessionManager.deriveSessionId 保持一致 */
+  const derivedSessionId = (key) => {
+    const hash = createHash('sha256').update(key).digest('hex')
+    return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`
+  }
+
+  /** 会话记录查得慢(要翻文件),按 sessionId 缓存一分钟 */
+  const peerCache = new Map()
+  const peerOf = (sessionId) => {
+    if (!sessionId) return null
+    const hit = peerCache.get(sessionId)
+    if (hit && Date.now() - hit.at < 60_000) return hit.peer
+    let peer = null
+    const record = sessionManager()?.findBySessionId?.(sessionId)
+    if (record?.peerId) {
+      peer = { scope: record.scope, peerId: record.peerId, senderId: record.senderId }
+    } else {
+      try {
+        const prefs = JSON.parse(readFileSync(join(homedir(), '.dsh-qqbot', 'model-prefs.json'), 'utf8'))
+        for (const [key, id] of Object.entries(prefs?.sessionIds ?? {})) {
+          if (id !== sessionId && derivedSessionId(key) !== sessionId) continue
+          const [, , scope, peerId] = key.split(':')
+          if (!scope || !peerId) continue
+          peer = { scope, peerId }
+          break
+        }
+      } catch {
+        /* 文件不在/读不动就算了 */
+      }
+    }
+    peerCache.set(sessionId, { at: Date.now(), peer })
+    return peer
+  }
+
+  /**
+   * 这个会话是谁:键用 `scope:peerId`(同一个群 `/new` 之后也还是同一个群,
+   * 关系账不该重开一份),拿不到就退回 sessionId。
+   */
+  const convInfoOf = (session) => {
+    const sessionId = String(session?.id ?? '')
+    const peer = sessionId ? peerOf(sessionId) : null
+    if (peer?.peerId) {
+      const short = String(peer.peerId).slice(0, 8)
+      return {
+        conv: `${peer.scope}:${peer.peerId}`,
+        label: peer.scope === 'group' ? `群 ${short}` : `私聊 ${short}`,
+        peer,
+        sessionId,
+      }
+    }
+    // fork 改动：原实现是 `会话 ${sessionId.slice(0, 8)}`，
+    // 但 DSH 的会话 id 形如 `session-30e8fa99-...`，前 8 个字符永远是
+    // `session-`，标签只会得到「会话 session-」，毫无信息量。
+    // 这里先剥掉 `session-` 前缀，再取 8 位真正的 id 片段。
+    const shortId = sessionId.replace(/^session-/, '').slice(0, 8)
+    return { conv: sessionId, label: shortId ? `会话 ${shortId}` : '', peer: null, sessionId }
+  }
+
+  /** 宿主装了 dsh-qqbot(qqbot_send_file 在那个 agent 的工具表里) */
+  const hasQqbotTool = (agent) => {
+    try {
+      const tools = ctx.get('tools')
+      if (!tools?.get || !agent) return false
+      if (tools.get('qqbot_send_file', agent)) return true
+      return Boolean(agent.ctx && tools.get('qqbot_send_file', agent.ctx))
+    } catch {
+      return false
+    }
+  }
+
+  const sessionOf = (source) => {
+    try {
+      return source?.agent?.session ?? source?.session ?? null
+    } catch {
+      return null
+    }
+  }
+
+  const channelEnabled = (channel, channels) => {
+    if (channel === 'qq') return channels.qq !== false
+    if (channel === 'web') return channels.web !== false
+    return channels.unknown === true
+  }
+
+  /** 关系账里按昵称/ID 找一个人 */
+  const findPersonKey = (needle) => {
+    const text = String(needle ?? '').trim()
+    if (!text) return ''
+    if (state.people?.[text]) return text
+    for (const [key, row] of Object.entries(state.people ?? {})) {
+      if (row.name && (row.name === text || row.name.includes(text) || text.includes(row.name))) return key
+    }
+    return text
+  }
+
+  /**
+   * 把状态推到「现在」,顺便听一耳朵这一轮新到的话。
+   * 系统提示词段的渲染函数和几个工具都走这里 —— 拿到的一定是此刻的心情。
+   *
+   * 「新到」有两个条件:seq 比上次读过的靠后,而且**是最近 15 分钟内的**。
+   * 后一条是为了不翻旧账:插件刚装上、会话刚 resume 回来时,
+   * 历史里几十条旧消息不该一起冲上来改她的心情。
+   */
+  const tickState = (session, { react = true, life = false, extra = true } = {}) => {
+    const now = Date.now()
+    decay(state, now)
+    let applied = []
+    let event = null
+    let cursorMoved = false
+    if (session && react && settings.react.enabled !== false) {
+      const info = convInfoOf(session)
+      const seen = Number(state.seen[info.sessionId]) || 0
+      const messages = readUserMessages(session, { since: seen })
+      if (messages.length > 0) {
+        state.seen[info.sessionId] = messages[messages.length - 1].seq
+        cursorMoved = true
+        const freshMs = Math.max(1, Number(settings.react.freshMinutes) || 15) * 60_000
+        const fresh = messages.filter((msg) => !msg.time || now - msg.time <= freshMs)
+        if (fresh.length > 0) {
+          applied = reactToMessages(state, fresh, {
+            conv: info.conv,
+            convLabel: info.label,
+            now,
+            maxPerTurn: settings.react.maxPerTurn,
+            cooldownMin: settings.react.cooldownMin,
+            strongCooldownMin: settings.react.strongCooldownMin,
+          })
+          for (const item of applied) {
+            log('info', `心情被带动:${item.why || item.rule} → ${state.emotion.key}(${Math.round(state.emotion.intensity)})`)
+            audit({ kind: 'react', rule: item.rule, key: state.emotion.key, applied: item.intensity ?? 0, why: item.why })
+          }
+        }
+      }
+    }
+    // 自己的小事只在心跳里抛骰子:渲染函数每次模型步骤都会被调,
+    // 在那儿抛骰子等于「一说话就过日子」,频率会高得离谱。
+    if (life && settings.heartbeat.enabled !== false) {
+      const pick = maybeLifeEvent(state, now, {
+        chance: settings.heartbeat.lifeChance,
+        minGapMin: settings.heartbeat.minGapMinutes,
+      })
+      if (pick) {
+        const judged = appraise(
+          { kind: 'life', why: pick.text, strength: 0.55, dims: pick.dims },
+          { traits: state.traits, energy: (state.core.energy ?? 55) / 100, hunger: state.drives.hunger, load: (state.drives.fatigue ?? 0) * 0.5 },
+        )
+        if (judged.key !== 'calm') {
+          const out = applyImpulse(state, { key: judged.key, intensity: judged.intensity, why: pick.text, source: 'life', stimulus: `life:${pick.id}`, dims: judged.dims }, now)
+          if (out) {
+            event = out
+            remember(state, { kind: 'life', key: out.key, intensity: out.intensity, why: pick.text }, now)
+            log('info', `自己的小事:${pick.text} → ${out.key}(${out.intensity})`)
+            audit({ kind: 'life', id: pick.id, key: out.key, applied: out.intensity, why: pick.text })
+          }
+        }
+      }
+    }
+    // 反刍:没消化的事过一阵子自己冒出来
+    if (extra && settings.heartbeat.rumination !== false) {
+      const due = dueRumination(state, now)
+      if (due) {
+        const out = applyImpulse(state, due, now)
+        if (out) {
+          event = event ?? out
+          log('info', `又想起一件事:${due.why} → ${out.key}(${out.intensity})`)
+          audit({ kind: 'rumination', key: out.key, applied: out.intensity, why: due.why })
+        }
+      }
+    }
+    // 心情修复:底色差久了,她自己找点乐子
+    if (extra && settings.heartbeat.moodRepair !== false) {
+      const repair = maybeMoodRepair(state, now)
+      if (repair) {
+        event = event ?? repair
+        remember(state, { kind: 'life', key: repair.key, intensity: repair.intensity, why: repair.why }, now)
+        audit({ kind: 'repair', key: repair.key, applied: repair.intensity, why: repair.why })
+      }
+    }
+    // 深夜复盘:一天一次
+    if (extra && settings.heartbeat.review !== false) {
+      const review = nightlyReview(state, now)
+      if (review) {
+        log('info', `深夜复盘:${review.text}`)
+        audit({ kind: 'review', why: review.text, released: review.released })
+      }
+    }
+    // 心情动了、或者「读到哪」往前走了,就落盘。
+    // 游标也必须落盘:不然插件一重载,最近 15 分钟的消息会被重新读一遍、再冲一次情绪。
+    if (applied.length > 0 || event || cursorMoved) commit()
+    return { now, applied, event }
+  }
+
+  /** 一次渲染/工具调用要的完整视角 */
+  const viewOf = (session, now = Date.now()) => {
+    const info = convInfoOf(session)
+    const person = lastSpeaker(session)
+    const view = snapshot(state, { now, conv: info.conv, person })
+    view.crisis = state.flags?.crisis && now - state.flags.crisis.at < 2 * 3_600_000 ? state.flags.crisis : null
+    view.identity = settings.identity || ''
+    return { info, view }
+  }
+
+  // ── 系统提示词 ──────────────────────────────────────────────────────────
+  const channelOf = (context) => {
+    const agent = context?.agent ?? context?.scope ?? null
+    const session = sessionOf(context)
+    if (!session) return null
+    return channelOfSession(session, { hasQqbot: hasQqbotTool(agent) })
+  }
+
+  /** 静态规则块:字节级不变(它在前缀里,一变缓存就废) */
+  const rulesSectionText = (context) => {
+    try {
+      if (settings.promptEnabled === false) return ''
+      const channel = channelOf(context)
+      if (!channel || !channelEnabled(channel, settings.channels)) return ''
+      return RULES_TEXT
+    } catch {
+      return ''
+    }
+  }
+
+  /** 实时状态块:固定模板,放在提示词最后 */
+  const stateSectionText = (context) => {
+    try {
+      if (settings.promptEnabled === false) return ''
+      const session = sessionOf(context)
+      if (!session) return ''
+      const channel = channelOf(context)
+      if (!channel || !channelEnabled(channel, settings.channels)) return ''
+      const { now } = tickState(session)
+      return renderMoodSection(viewOf(session, now).view)
+    } catch (error) {
+      // 这里绝不能抛:渲染函数抛了整份提示词就组装不出来
+      log('warn', `心情段渲染失败(已跳过):${error instanceof Error ? error.message : String(error)}`)
+      return ''
+    }
+  }
+
+  ctx.inject(['systemPrompt'], (scope) => {
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:rules',
+      // 0 = 人设,500 = plan 策略:规则紧跟人设
+      order: 100,
+      text: rulesSectionText,
+    }), 'fish-mood: rules section')
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:now',
+      // 9800:整段提示词的最后(9900 是结构化输出)。放最后是为了少打断前缀缓存
+      order: 9800,
+      text: stateSectionText,
+    }), 'fish-mood: state section')
+  })
+
+  // ── 工具 ────────────────────────────────────────────────────────────────
+  const tools = ctx.get('tools')
+  if (!tools?.register) {
+    log('warn', 'tools 服务不可用,mood_* 工具未注册')
+  } else {
+    tools.register({
+      name: 'mood_now',
+      description:
+        '看自己现在什么心情:哪种情绪、多浓、为什么(评价),还有心情底色(愉快度/精力)、性格、身体(饿/困)、' +
+        '跟这个群/这个人处得怎么样、今天发生的小事、心里还记着的事。' +
+        '想回答「你心情咋样」「你怎么了」,或者想先弄清自己现在该用什么语气,就用它。action=diag 是给自己排障用的。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'now(默认)看心情 / diag 排障信息' },
+          limit: { type: 'number', description: '心里记着的事看几条,默认 6' },
+          person: { type: 'string', description: '可选:看某个人(填昵称或 openid)' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      output: TEXT_OUTPUT,
+      async execute(args, exec) {
+        const session = sessionOf(exec)
+        if (String(args.action ?? 'now').toLowerCase() === 'diag') {
+          const info = convInfoOf(session)
+          const channel = session ? channelOfSession(session, { hasQqbot: hasQqbotTool(exec?.agent) }) : '(没有 session)'
+          const events = sessionEventsOf(session)
+          const realUsers = events.filter((event) => event?.type === 'user/message' && event.data?.source?.kind === 'user')
+          const lastReal = realUsers[realUsers.length - 1]
+          const pending = session ? readUserMessages(session, { since: Number(state.seen[info.sessionId]) || 0 }) : []
+          const lines = [
+            `fish-mood rev ${PLUGIN_REV}(三层:情绪/心情/性格)`,
+            `状态文件:${join(stateDir, 'state.json')} · 审计:${join(stateDir, 'audit.jsonl')}`,
+            `当前会话:${info.conv || '(拿不到)'}${info.label ? `(${info.label})` : ''} · 渠道 ${channel}${channelEnabled(channel, settings.channels) ? '(会注入)' : '(不注入:channels 关了)'}`,
+            `事件 ${events.length} 条 · 真实用户消息 ${realUsers.length} 条${lastReal ? ` · 最后一条 seq ${lastReal.seq}(${new Date(lastReal.time).toLocaleTimeString('zh-CN', { hour12: false })})` : ''}`,
+            `读到哪:seq ${state.seen[info.sessionId] ?? '(还没开始听)'} · 这轮待读 ${pending.length} 条`,
+            `情绪:${state.emotion.key}(${Math.round(state.emotion.intensity)})${state.emotion.why ? ` · ${state.emotion.why}` : ''}`,
+            `心情:${viewOf(session).view.mood.label} · 底色:愉快度 ${Math.round(state.core.valence)} · 精力 ${Math.round(state.core.energy)} · ${circadian(new Date()).label}`,
+            `驱动:饿 ${(state.drives.hunger * 100).toFixed(0)}% · 困 ${(state.drives.fatigue * 100).toFixed(0)}% · 社交 ${(state.drives.social * 100).toFixed(0)}%`,
+            `统计:冲量 ${state.stats.impulses ?? 0} · 她自己记的 ${state.stats.feels ?? 0} · 小事 ${state.stats.lifeEvents ?? 0} · 反刍 ${state.stats.ruminated ?? 0} · 修复 ${state.stats.repairs ?? 0} · 复盘 ${state.stats.reviews ?? 0} · 性格微调 ${state.stats.traitShifts ?? 0} 次`,
+            `表现层:${state.emotion.hidden ? '憋着(表面装没事)' : '直接写在脸上'} · 累计憋着 ${Math.round(state.stats.maskedMinutes ?? 0)} 分钟 · 情绪续命 ${state.emotion.revives ?? 0} 次 · 待反刍 ${state.rumination.length} 条`,
+            `关系账:${Object.keys(state.convs ?? {}).length} 个会话 · ${Object.keys(state.people ?? {}).length} 个人 · 日记 ${state.diary.length} 条 · 记忆点 ${state.memories.length} 个`,
+          ]
+          return { text: lines.join('\n') }
+        }
+        const now = Date.now()
+        decay(state, now)
+        const person = args.person ? findPersonKey(String(args.person)) : lastSpeaker(session)
+        const info = convInfoOf(session)
+        const view = snapshot(state, { now, conv: info.conv, person })
+        view.crisis = state.flags?.crisis && now - state.flags.crisis.at < 2 * 3_600_000 ? state.flags.crisis : null
+        const lines = [renderMoodReport(view)]
+        const limit = Math.max(1, Math.min(20, Number(args.limit) || 6))
+        const rows = (state.diary ?? []).slice(-limit)
+        if (rows.length) {
+          lines.push('', `日记(最近 ${rows.length} 条):`, renderDiary(rows))
+        }
+        const people = Object.entries(state.people ?? {})
+          .sort((a, b) => (b[1].lastAt ?? 0) - (a[1].lastAt ?? 0))
+          .slice(0, 5)
+        if (people.length) {
+          lines.push('', '关系账(最近来往的几个人):')
+          for (const [key, row] of people) {
+            const notes = (row.notes ?? []).slice(-3)
+            lines.push(`- ${row.name || key}:暖度 ${Math.round(row.warmth)} · 亲密度 ${Math.round(row.closeness)} · 信任 ${Math.round(row.trust)}${notes.length ? ` · 记着「${notes.join('」「')}」` : ''}`)
+          }
+        }
+        return { text: lines.join('\n') }
+      },
+    })
+
+    tools.register({
+      name: 'mood_feel',
+      description:
+        '记一笔心情 —— 注意这是**申请**:引擎有配额和饱和,会把「实际生效多少」告诉你。' +
+        `情绪用这些词:${EMOTION_MENU}。` +
+        '被戳到、被感动、真的烦了、被人哄好了,用这个;想知道自己现在什么心情用 mood_now。' +
+        '为什么(why)写短一句,别写成作文。',
+      parameters: {
+        type: 'object',
+        properties: {
+          emotion: { type: 'string', description: `哪种情绪:${EMOTION_KEYS.slice(0, 12).join(' / ')} …(也可以用中文名)` },
+          intensity: { type: 'number', description: '多浓,1-100,默认 45(淡淡的 20 / 挺浓 60 / 上头 85)' },
+          why: { type: 'string', description: '一句为什么,短' },
+          person: { type: 'string', description: '可选:跟谁有关(昵称或 openid)' },
+          warmth: { type: 'number', description: '可选:-20..20,这件事让你对这个人的感觉暖了多少/凉了多少' },
+          show: { type: 'boolean', description: '可选:想不想让对方看出来。false = 会嘴硬、装没事(感受和表现是两回事)' },
+        },
+        required: ['emotion'],
+        additionalProperties: false,
+      },
+      output: TEXT_OUTPUT,
+      async execute(args, exec) {
+        const session = sessionOf(exec)
+        const now = Date.now()
+        const emo = resolveEmotion(args.emotion)
+        if (!emo || emo.key === 'calm') {
+          return { text: `认不出「${args.emotion}」这个情绪。能用的是:${EMOTION_KEYS.join(' / ')}(也可以直接写中文名)` }
+        }
+        decay(state, now)
+        // 配额:防止「反复加码把情绪推上天」(MAST FM-1.3/1.5 那类失败)
+        state.stats.feelLog = (state.stats.feelLog ?? []).filter((at) => now - at < 24 * 3_600_000)
+        const lastHour = state.stats.feelLog.filter((at) => now - at < 3_600_000).length
+        const lastDay = state.stats.feelLog.length
+        if (lastHour >= settings.feel.maxPerHour || lastDay >= settings.feel.maxPerDay) {
+          return { text: `今天记的够多了(一小时 ${lastHour} 次 / 一天 ${lastDay} 次,上限 ${settings.feel.maxPerHour} / ${settings.feel.maxPerDay})。心情不是点出来的,先照现在这个来。` }
+        }
+        const requested = Math.max(1, Math.min(100, Number(args.intensity) || 45))
+        const cur = state.emotion
+        const sameEmotion = cur.key === emo.key && cur.intensity > 0
+        const gapMin = (now - (cur.updatedAt || 0)) / 60_000
+        if (sameEmotion && gapMin < settings.feel.cooldownMin) {
+          return { text: `刚记过「${emo.name}」了(${Math.round(cur.intensity)}/100),让它待一会儿 —— ${settings.feel.cooldownMin} 分钟内不重复加码。` }
+        }
+        // 饱和:平的时候允许一次强情绪;同一种情绪只让它往上磨一点;换情绪可以压过去,但不许尖峰
+        const cap = cur.intensity <= FADE_OUT_LEVEL
+          ? Math.max(50, requested)
+          : sameEmotion
+            ? Math.round(cur.intensity + settings.feel.maxJump * 0.5)
+            : Math.max(30, Math.round(cur.intensity + settings.feel.maxJump * 0.6))
+        const applied = Math.min(requested, cap)
+        const out = applyImpulse(state, {
+          key: emo.key,
+          intensity: applied,
+          why: String(args.why ?? '').slice(0, 60),
+          source: 'self',
+          person: String(args.person ?? ''),
+          stimulus: `feel:${emo.key}`,
+          dims: { valence: emo.valence, relevance: 0.7, arousal: emo.arousal, agency: 'none' },
+        }, now)
+        state.stats.feelLog.push(now)
+        if (!out) {
+          commit()
+          return { text: '记下了(太淡了,没掀起什么)。' }
+        }
+        if (args.show === false) state.emotion.hidden = true
+        const personKey = args.person ? findPersonKey(String(args.person)) : ''
+        if (personKey && Number.isFinite(Number(args.warmth))) {
+          const row = state.people[personKey] ?? { name: String(args.person), warmth: 0, closeness: 25, trust: 50, bank: 0, notes: [], lastAt: now, count: 0 }
+          row.warmth = Math.max(-100, Math.min(100, row.warmth + Number(args.warmth)))
+          row.closeness = Math.max(0, Math.min(100, row.closeness + Number(args.warmth) * 0.3))
+          state.people[personKey] = row
+        }
+        remember(state, { kind: 'feel', key: out.key, intensity: out.intensity, why: String(args.why ?? ''), person: personKey }, now)
+        audit({ kind: 'feel', key: out.key, requested, applied: out.intensity, clamped: applied < requested, why: String(args.why ?? ''), hidden: args.show === false })
+        commit()
+        const tier = tierOf(out.intensity)
+        const notes = []
+        if (applied < requested) notes.push(`申请 ${requested},实际 ${out.intensity}(饱和了)`)
+        if (out.suppressed) notes.push('刚才那件事还压着,这次只是把它削了一点')
+        if (args.show === false) notes.push('记成「不让人看出来」')
+        return {
+          text: `记下了:${out.emotion.name}(${tier.label} ${out.intensity}/100)${args.why ? ` · ${args.why}` : ''}` +
+            `${notes.length ? `\n(${notes.join(';')})` : ''}\n接下来就按这个心情说话 —— 语气跟着走,但别把心情说出来。它会自己淡下去。`,
+        }
+      },
+    })
+
+    tools.register({
+      name: 'mood_diary',
+      description:
+        '翻自己的心情日记,或者往里写一条。action=read(默认)按天看最近记了什么(心情、起因、谁);' +
+        'action=write 写一条自己的事或一句心里话 —— 只留给自己,不发出去,写下来会舒服一点(情绪会真的降一点);' +
+        'action=reflect 现在就把这一天过一遍(平时是深夜自动复盘)。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'read(默认)翻日记 / write 写一条 / reflect 复盘' },
+          text: { type: 'string', description: 'action=write 时写的内容(一句心里话,或者今天发生的一件小事)' },
+          mood: { type: 'string', description: 'action=write 时可选:写的时候是什么心情' },
+          days: { type: 'number', description: 'action=read:看最近几天的,默认 3' },
+          query: { type: 'string', description: 'action=read:按关键词翻(比如某个人的名字、某件事)' },
+          limit: { type: 'number', description: 'action=read:最多几条,默认 20' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      output: TEXT_OUTPUT,
+      async execute(args) {
+        const now = Date.now()
+        decay(state, now)
+        const action = String(args.action ?? 'read').toLowerCase()
+        if (action === 'write') {
+          const text = String(args.text ?? '').trim()
+          if (!text) return { text: '(没写内容)' }
+          const mood = args.mood ? resolveEmotion(args.mood) : null
+          if (mood && mood.key !== 'calm') {
+            applyImpulse(state, { key: mood.key, intensity: 30, why: text.slice(0, 40), source: 'self', stimulus: 'diary' }, now)
+          }
+          const released = catharsis(state, now, 1)
+          remember(state, { kind: 'feel', key: state.emotion.key, intensity: 0, why: text.slice(0, 120) }, now)
+          audit({ kind: 'diary-write', released, why: text.slice(0, 60) })
+          commit()
+          return { text: `写下了${released ? `(心里松了 ${released} 分)` : ''}。这条只有你自己看得到。` }
+        }
+        if (action === 'reflect') {
+          state.lastReviewDay = ''
+          // 她主动要复盘:不受「只在深夜复盘」的时间窗限制,但当天还是只一次
+          const review = nightlyReview(state, now, { force: true })
+          commit()
+          return { text: review ? `复盘完了:${review.text}${review.released ? `(放下了 ${review.released} 分)` : ''}` : '(今天已经复盘过了)' }
+        }
+        const days = Math.max(1, Math.min(30, Number(args.days) || 3))
+        const limit = Math.max(1, Math.min(50, Number(args.limit) || 20))
+        const query = String(args.query ?? '').trim()
+        let rows = (state.diary ?? []).filter((row) => now - row.at <= days * 24 * 3_600_000)
+        if (query) rows = rows.filter((row) => String(row.text ?? '').includes(query) || String(row.person ?? '').includes(query))
+        rows = rows.slice(-limit)
+        if (!rows.length) return { text: query ? `(最近 ${days} 天里没找到「${query}」)` : `(最近 ${days} 天没记什么)` }
+        return { text: `最近 ${days} 天,记了 ${rows.length} 条:\n${renderDiary(rows)}` }
+      },
+    })
+  }
+
+  // ── 心跳 ────────────────────────────────────────────────────────────────
+  // 情绪会自己淡,小事会自己发生,没消化的事会自己冒出来 —— 这些不需要有人跟她说话。
+  if (settings.heartbeat.enabled !== false) {
+    const everyMs = Math.max(1, Number(settings.heartbeat.everyMinutes) || 10) * 60_000
+    const beat = () => {
+      try {
+        tickState(null, { react: false, life: true })
+        commit()
+      } catch (error) {
+        log('warn', `心跳出错(已跳过):${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const first = setTimeout(beat, 30_000)
+    const timer = setInterval(beat, everyMs)
+    ctx.effect(() => () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }, 'fish-mood: heartbeat')
+  }
+}
+
+export { DEFAULTS, PLUGIN_REV }
+export { renderMoodSection as moodSectionTextForTest, RULES_TEXT }

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Fish Mood",
+    "description": "Gives the agent a mood that actually changes: 36 emotions with half-lives that fade on their own, a baseline that follows the clock, per-group and per-person warmth, and small life events between chats. Ships the mood_now / mood_feel / mood_diary tools."
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "@istarry/spoon-mood",
+  "version": "0.1.0",
+  "description": "情绪状态插件（fork 自 dsh-fish-mood）：给 agent 一副会变化的心情 —— 36 种情绪带半衰期与掩饰能力，底色随作息起伏，关系暖度按人记账。附带 mood_now / mood_feel / mood_diary。",
+  "type": "module",
+  "main": "plugin.js",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./plugin.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "plugin.js",
+    "lib/",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "tools/"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "mood",
+    "emotion",
+    "affect",
+    "persona",
+    "agent-state"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iStarryDust/spoon-mood.git"
+  },
+  "homepage": "https://github.com/iStarryDust/spoon-mood#readme",
+  "bugs": {
+    "url": "https://github.com/iStarryDust/spoon-mood/issues"
+  },
+  "author": "ChencLi819 (upstream) / istarry (fork)",
+  "license": "MIT",
+  "upstream": {
+    "name": "dsh-fish-mood",
+    "repository": "https://github.com/ChencLi819/dsh-fish-mood",
+    "license": "MIT"
+  }
+}
