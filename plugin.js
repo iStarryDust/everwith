@@ -34,7 +34,7 @@ import {
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
 import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
-import { DEFAULT_REMEMBER_PROMPT, appendEntry, parseEntries, readMemory, renderMemory, writeMemory } from './lib/memory.js'
+import { DEFAULT_REMEMBER_PROMPT, REMEMBER_INSTRUCTION, appendEntry, cleanExtracted, parseEntries, readMemory, renderMemory, writeMemory } from './lib/memory.js'
 
 export const name = 'everwith'
 /** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
@@ -686,6 +686,25 @@ export function apply(ctx, config = {}) {
     return { ok: false, error: errors.join(' | ') }
   }
 
+  // ── 从对话提炼记忆 ───────────────────────────────────────────────────────
+  // 用「最近活跃的那个会话」自己的模型跑一次提炼:插件拿不到浏览器的当前会话 id,
+  // 但 agent/status 事件里能拿到 agent,它带着 provider/model 配置。
+  let lastAgent = null
+
+  // 拿一个能用的 agent:优先最近活跃的,否则从 agents 服务里挑一个带模型配置的
+  const pickAgent = (c) => {
+    try {
+      const svc = c.get?.('agents')
+      if (!svc) return null
+      const raw = typeof svc.list === 'function' ? svc.list() : (typeof svc.values === 'function' ? [...svc.values()] : [])
+      const arr = Array.isArray(raw) ? raw : (raw && typeof raw[Symbol.iterator] === 'function' ? [...raw] : [])
+      return arr.find((a) => a?.session?.requestHeader?.()?.config) ?? arr[0] ?? null
+    } catch { return null }
+  }
+  ctx.effect(() => ctx.on('agent/status', ({ agent }) => {
+    if (agent?.session) lastAgent = agent
+  }), 'everwith: track agent')
+
   // ── 极简模式:把工具表收成白名单 ────────────────────────────────────────
   // 官方文档原话:`ctx.tools.restrict()` can only remove tools,而且要在
   // **那个 agent 自己的上下文**上调,这样 schema、查找、执行三处才对得齐。
@@ -707,6 +726,7 @@ export function apply(ctx, config = {}) {
       }
     }), 'everwith: minimal restrict')
   }
+
 
 
   /** 看屏幕:设置页读这个拿配置和状态,写完立刻生效,不用重启 */
@@ -755,7 +775,7 @@ export function apply(ctx, config = {}) {
       path: '/api/everwith/screen',
       handler: async (req, res) => {
         if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
-          reply(res, 200, snapshotOf())
+            reply(res, 200, snapshotOf())
           return
         }
         try {
@@ -781,7 +801,12 @@ export function apply(ctx, config = {}) {
           state.screen = { ...(state.screen ?? {}), nextAt: 0 }
           rescheduleScreen?.()
           commit()
-          reply(res, 200, snapshotOf())
+          const out = snapshotOf()
+          if (extracted) {
+            out.extract = extracted
+            out.memoryText = readMemory(stateDir)
+          }
+          reply(res, 200, out)
         } catch (error) {
           reply(res, 400, { ok: false, error: String(error?.message ?? error) })
         }
@@ -869,6 +894,7 @@ export function apply(ctx, config = {}) {
           let raw = ''
           for await (const chunk of req) raw += chunk
           const body = raw ? JSON.parse(raw) : {}
+          let extracted = null
           const patch = readSettingsOverrides()
 
           // 清空:情绪和账本全部重来(只保留插件配置)
@@ -953,6 +979,36 @@ export function apply(ctx, config = {}) {
             }
             patch.heartbeat = next
           }
+          // 从对话提炼:settings 通道带一个 extract 字段,跑到就提炼,结果随响应回去
+          if (typeof body.extract === 'string' && body.extract.trim()) {
+            try {
+              const src = body.extract.trim().slice(0, 20000)
+              let agent = lastAgent
+              if (!agent?.session) agent = pickAgent(ctx)
+              const callConfig = agent?.session?.requestHeader?.()?.config
+              const llm = ctx.get('llm') ?? ctx.llm
+              if (!agent || !callConfig || !llm?.stream) throw new Error('还没和任何会话连上,先在对话里说句话再来提炼')
+              const userMsg = (x) => ({ id: crypto.randomUUID(), role: 'user', content: [{ type: 'text', text: x }], source: { kind: 'user' } })
+              let output = ''
+              for await (const chunk of llm.stream({ ...callConfig, messages: [userMsg(src), userMsg(REMEMBER_INSTRUCTION)], sessionId: agent.session.id })) {
+                if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') output += chunk.text
+              }
+              const found = cleanExtracted(output)
+              let doc = readMemory(stateDir)
+              let added = 0, refreshed = 0
+              for (const one of found) {
+                const out = appendEntry(doc, one, Date.now())
+                if (out.added) added++
+                else if (out.refreshed) refreshed++
+                doc = out.text
+              }
+              if (found.length) writeMemory(stateDir, doc)
+              audit({ kind: 'memory-extract', added, refreshed, chars: src.length })
+              extracted = { added, refreshed, entries: found }
+            } catch (error) {
+              extracted = { error: String(error?.message ?? error).slice(0, 160) }
+            }
+          }
           if (typeof body.memoryText === 'string') {
             writeMemory(stateDir, body.memoryText.replace(/\r\n/g, '\n'))
           }
@@ -967,7 +1023,12 @@ export function apply(ctx, config = {}) {
 
           writeSettingsOverrides(patch)
           commit()
-          reply(res, 200, snapshotOf())
+          const out = snapshotOf()
+          if (extracted) {
+            out.extract = extracted
+            out.memoryText = readMemory(stateDir)
+          }
+          reply(res, 200, out)
         } catch (error) {
           reply(res, 400, { ok: false, error: String(error?.message ?? error) })
         }

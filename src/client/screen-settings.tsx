@@ -17,7 +17,7 @@ type NowSnap = {
   ok: boolean
   now: number
   enabled: boolean
-  emotion: { name: string; intensity: number; tier: string; why: string }
+  emotion: { name: string; intensity: number; tier: string; why: string; since?: number }
   mood: { label: string; reason: string; tint: number; energy: number }
   traits: string[]
   drives: string[]
@@ -176,6 +176,7 @@ export function ScreenSettingsSection() {
     }
   }
 
+
   const slider = (label: string, value: number, min: number, max: number, suffix: string, onCommit: (next: number) => void, disabled = false) => (
     <label style={sliderRow} key={label}>
       <span style={{ opacity: 0.8 }}>{label}</span>
@@ -228,6 +229,9 @@ export function ScreenSettingsSection() {
                 <span style={{ fontSize: 15, fontWeight: 600 }}>{nowSnap.emotion.name}</span>
                 <span style={{ opacity: 0.7, fontSize: 12 }}>
                   {nowSnap.emotion.tier} {nowSnap.emotion.intensity}/100
+              {typeof nowSnap.emotion.since === 'number' && nowSnap.emotion.since > 0 ? (
+                <span style={{ opacity: 0.45, fontSize: 11, marginLeft: 4 }}>{nowSnap.emotion.since} 分钟前</span>
+              ) : null}
                 </span>
                 {nowSnap.emotion.why ? <span style={{ opacity: 0.6, fontSize: 12 }}>· {nowSnap.emotion.why}</span> : null}
               </div>

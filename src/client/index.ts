@@ -18,6 +18,7 @@ import { applyCleanup } from './cleanup.js'
 import { apply as applyVoice } from './voice/index.ts'
 import { MIC_CSS, VoiceButton } from './mic.tsx'
 import { ScreenSettingsSection } from './screen-settings.tsx'
+import { RememberAction } from './remember-action'
 
 export const inject = ['slots', 'sessions']
 
@@ -71,9 +72,9 @@ export function apply(ctx: Context): void {
         await session.prompt([{ type: 'text', text }], 'steer')
         return true
       }
-      console.warn('[spoon-companion] 会话对象上没有 prompt 方法')
+      console.warn('[everwith] 会话对象上没有 prompt 方法')
     } catch (error) {
-      console.warn('[spoon-companion] 调 prompt 失败', error)
+      console.warn('[everwith] 调 prompt 失败', error)
     }
     return false
   }
@@ -82,19 +83,19 @@ export function apply(ctx: Context): void {
   try {
     ctx.effect(() => {
       const style = document.createElement('style')
-      style.dataset.plugin = 'spoon-companion-mic'
+      style.dataset.plugin = 'everwith-mic'
       style.textContent = MIC_CSS
       document.head.appendChild(style)
       return () => {
         style.remove()
       }
-    }, 'spoon-companion: mic styles')
+    }, 'everwith: mic styles')
 
     ctx.slots.inject('conversation.input.right', () =>
       ctx.slots.register(
         {
           name: 'conversation.input.right',
-          id: 'spoon-companion-mic',
+          id: 'everwith-mic',
           order: 70,
         },
         (props: Record<string, unknown>) => VoiceButton({ ...props, send }) as never,
@@ -104,15 +105,32 @@ export function apply(ctx: Context): void {
     /* 挂不上就只是没有按钮 */
   }
 
+  // 聊天消息动作行：把最近聊的记进长期记忆
+  // 组件自带三层兜底(useChat 守卫 / try-catch / 空列表),拿不到宿主注入时按钮不出现,不影响页面。
+  try {
+    ctx.slots.inject('conversation.chat.assistant-actions', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.chat.assistant-actions',
+          id: 'everwith-remember',
+          order: 20,
+        },
+        RememberAction as never,
+      ),
+    )
+  } catch {
+    /* 挂不上就只是没有这个按钮 */
+  }
+
   // 设置 → 单独一列：看屏幕的开关和节奏
   try {
     ctx.slots.inject('settings.section', () =>
       ctx.slots.register(
         {
           name: 'settings.section',
-          id: 'spoon-companion-screen',
+          id: 'everwith-screen',
           order: 60,
-          label: 'Spoon 陪伴',
+          label: '常伴',
         },
         ScreenSettingsSection as never,
       ),
