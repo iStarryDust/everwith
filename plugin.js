@@ -892,6 +892,8 @@ export function apply(ctx, config = {}) {
         nightFactor: Number(settings.screen?.nightFactor) || 8,
         dailyLimit: Number(settings.screen?.dailyLimit) || 120,
         speak: String(settings.screen?.speak ?? 'never'),
+        speakPerDay: Number(settings.screen?.speakPerDay) || 2,
+        speakCooldownMin: Number(settings.screen?.speakCooldownMin) || 120,
       },
     })
     const route = {
