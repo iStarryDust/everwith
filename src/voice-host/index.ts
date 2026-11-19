@@ -219,6 +219,7 @@ export function apply(ctx: Context): void {
         order: 3000,
         text: () => {
           const cfg = readConfig()
+          if (cfg.enabled === false) return ''
           if (cfg.engine !== 'mimo') return ''
           if (!callProbe()) return ''
           return mimoSpeechGuidance(cfg.mimoStyle)

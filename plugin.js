@@ -21,7 +21,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import * as voicePlugin from './lib/voice.js'
 import { applyAsrRoutes } from './lib/asr-route.js'
-import { isVoiceActive, isCallActive, markCallSession, setCallGlobal } from './lib/asr.js'
+import { isCallActive, markCallSession, setCallGlobal } from './lib/asr.js'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -504,21 +504,15 @@ export function apply(ctx, config = {}) {
 
   /**
    * 这个会话现在在不在通话里。
-   * 三条任意一条成立就算：真的在送音频 / 客户端报了全局开关 / 这个会话被单独标过。
+   * **只认客户端那把开关** —— 点了通话才算。不拿"有没有在送音频"当证据:
+   * 录音可能在页面一打开就在跑,拿它判断会把普通打字聊天误判成通话。
    */
   const inCallOf = (context) => {
     try {
       if ((settings.callMode ?? {}).enabled === false) return false
       const session = sessionOf(context)
       if (!session) return false
-      const id = String(session.id ?? '')
-      let voiceActive = false
-      try {
-        voiceActive = isVoiceActive()
-      } catch {
-        voiceActive = false
-      }
-      return voiceActive || callGlobal || Boolean(id && callSessions.has(id))
+      return isCallActive(String(session.id ?? ''))
     } catch {
       return false
     }
