@@ -106,19 +106,38 @@ const TEXT_OUTPUT = {
 // 注意不要再写「语气用标签」这类规则 —— 语音格式那一段已经管了。
 const CALL_PROMPT = '现在是语音通话:回短句、口语,不用排版符号。'
 
-const MULTI_TURN_PROMPT = [
-  '【像微信一样说话】',
-  '聊天窗口,一条一句。',
-  '',
-  '这一条只写一句。写完就停。',
+/**
+ * 分条说话的规则有两套 —— 在不在通话里,写法完全不同:
+ *   · 通话:看不见人,像打电话。短、口语、可以有停顿;绝不能有动作描写,会被念出来。
+ *   · 不在通话:在身边。可以写动作(放括号里),但一条还是一句。
+ * 两套都只讲「怎么分条」,不规定说什么 —— 内容归人格提示词。
+ */
+const MULTI_TURN_RULES = [
+  '一条一句。这一条只写一句,写完就停。',
   '还想说下一句,在最后另起一行写 <!--more-->,然后停下来 —— 标记下面不写任何内容,',
-  '系统会再给一次开口的机会。不想说了,就不写标记。',
+  '会再给一次开口的机会。不想说了,就不写标记。',
   '',
   '说几句看当时有多少话,不用凑。',
+]
+
+const MULTI_TURN_PROMPT_NEAR = [
+  '【在身边说话】',
+  ...MULTI_TURN_RULES,
+  '',
+  '动作、表情放在括号里,比如「(把头发拢到耳后)」。',
   '',
   '格式对照:',
   '  对: 这一句 / 换行 / <!--more--> / 到此为止',
   '  错: 这一句 / 换行 / <!--more--> / 又接下一句 —— 标记下面不该有字',
+].join('\n')
+
+const MULTI_TURN_PROMPT_CALL = [
+  '【正在通电话】',
+  '看不见人,只有声音。说话短、口语,可以有停顿,可以只说半句。',
+  ...MULTI_TURN_RULES,
+  '',
+  '不写动作、表情、括号里的东西 —— 语音会把它们念出来。',
+  '不用排版符号:不要列表、标题、加粗、代码块。',
 ].join('\n')
 
 export function mergeConfig(config = {}) {
@@ -485,6 +504,28 @@ export function apply(ctx, config = {}) {
     }
   }, 'spoon-companion: call route')
 
+  /**
+   * 这个会话现在在不在通话里。
+   * 三条任意一条成立就算：真的在送音频 / 客户端报了全局开关 / 这个会话被单独标过。
+   */
+  const inCallOf = (context) => {
+    try {
+      if ((settings.callMode ?? {}).enabled === false) return false
+      const session = sessionOf(context)
+      if (!session) return false
+      const id = String(session.id ?? '')
+      let voiceActive = false
+      try {
+        voiceActive = isVoiceActive()
+      } catch {
+        voiceActive = false
+      }
+      return voiceActive || callGlobal || Boolean(id && callSessions.has(id))
+    } catch {
+      return false
+    }
+  }
+
   const callSectionText = (context) => {
     try {
       const cfg = settings.callMode ?? {}
@@ -492,19 +533,7 @@ export function apply(ctx, config = {}) {
       if (settings.promptEnabled === false) return ''
       const session = sessionOf(context)
       if (!session) return ''
-      const id = String(session.id ?? '')
-      // 三条任意一条成立就算在通话：
-      //   1. 最近几秒真的在往这儿送音频 —— 最可靠，不依赖客户端另外通知，
-      //      麦克风一停就自然退出
-      //   2. 客户端报了全局开关
-      //   3. 这个会话被单独标过
-      let voiceActive = false
-      try {
-        voiceActive = isVoiceActive()
-      } catch {
-        voiceActive = false
-      }
-      if (!voiceActive && !callGlobal && !(id && callSessions.has(id))) return ''
+      if (!inCallOf(context)) return ''
       return String(cfg.prompt ?? '').trim() || CALL_PROMPT
     } catch {
       return ''
@@ -576,7 +605,10 @@ export function apply(ctx, config = {}) {
       // 这段是"怎么写"的格式要求,不是"现在是什么状态",
       // 混到最后反而和语音格式那段打架。状态类的才该靠后。
       order: 300,
-      text: () => (settings.multiTurn?.enabled !== false ? MULTI_TURN_PROMPT : ''),
+      text: (context) => {
+        if (settings.multiTurn?.enabled === false) return ''
+        return inCallOf(context) ? MULTI_TURN_PROMPT_CALL : MULTI_TURN_PROMPT_NEAR
+      },
     }), 'fish-mood: turns section')
     scope.effect(() => scope.systemPrompt.section({
       name: 'fish-mood:call',
@@ -722,8 +754,8 @@ export function apply(ctx, config = {}) {
     tools.register({
       name: 'mood_now',
       description:
-        '看当前心情:哪种情绪、多浓、为什么(评价),还有心情底色(愉快度/精力)、性格、身体(饿/困)、' +
-        '跟这个人处得怎么样、今天发生的小事、心里还记着的事。' +
+        '看当前心情:哪种情绪、多浓、为什么(评价),还有心情底色(愉快度/精力)、性格、' +
+        '身体(泛红/酥麻/想要/馋/困)、跟这个人处得怎么样、今天发生的小事、心里还记着的事。' +
         '面对「心情咋样」「怎么了」这类问题,或者要确定当前语气,用它。action=diag 是排障用的。',
       parameters: {
         type: 'object',
@@ -790,14 +822,14 @@ export function apply(ctx, config = {}) {
     tools.register({
       name: 'mood_feel',
       description:
-        '记一笔心情 —— 注意这是**申请**:引擎有配额和饱和,会回报「实际生效多少」。' +
+        '记一笔心情 —— 这是一次**申请**:引擎有配额和饱和,会回报「实际生效多少」。' +
         `情绪用这些词:${EMOTION_MENU}。` +
         '被戳到、被感动、真的烦了、被人哄好了,用这个;要看当前心情用 mood_now。' +
         '为什么(why)写短一句,别写成作文。',
       parameters: {
         type: 'object',
         properties: {
-          emotion: { type: 'string', description: `哪种情绪:${EMOTION_KEYS.slice(0, 12).join(' / ')} …(也可以用中文名)` },
+          emotion: { type: 'string', description: '哪种情绪:英文 key 或中文名,完整列表见工具描述' },
           intensity: { type: 'number', description: '多浓,1-100,默认 45(淡淡的 20 / 挺浓 60 / 上头 85)' },
           why: { type: 'string', description: '一句为什么,短' },
           person: { type: 'string', description: '可选:跟谁有关(昵称或 openid)' },
