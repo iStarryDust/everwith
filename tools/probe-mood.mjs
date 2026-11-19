@@ -1,4 +1,4 @@
-// 探针:确认 dsh-fish-mood 真的在跑,而且是**这一版**在跑。
+// 探针:确认 dsh-everwith 真的在跑,而且是**这一版**在跑。
 //
 // 为什么不用日志:桌面端把宿主子进程的 stdout 收走了,插件注册失败在用户侧一点痕迹都没有。
 // 会话日志里的 request/header 是「模型实际看到的东西」,它才说明插件到底加载没加载;
@@ -69,7 +69,7 @@ if (targets.length === 0) {
 // 账本:状态机真的在写吗。也用来判断提示词段到底渲染过没有 ——
 // 系统提示词本身**不落会话日志**(日志里只有 request/header 的工具表),
 // 所以「这一段工作过」的证据是:渲染时会把「读到哪」写进 seen。
-const stateFile = join(homedir(), '.dsh', 'fish-mood', 'state.json')
+const stateFile = join(homedir(), '.dsh', 'everwith', 'state.json')
 let moodState = null
 try {
   moodState = JSON.parse(readFileSync(stateFile, 'utf8'))
@@ -101,7 +101,7 @@ for (const target of targets) {
 
 if (moodState) {
   const mood = moodState.mood ?? {}
-  console.log('账本 ~/.dsh/fish-mood/state.json:')
+  console.log('账本 ~/.dsh/everwith/state.json:')
   console.log(`  现在:${mood.key}(${Math.round(mood.intensity ?? 0)})${mood.why ? ` · ${mood.why}` : ''} · 底色 ${Math.round(moodState.core?.valence ?? 0)}/${Math.round(moodState.core?.energy ?? 0)}`)
   console.log(`  日记 ${(moodState.diary ?? []).length} 条 · 关系 ${Object.keys(moodState.convs ?? {}).length} 个会话 / ${Object.keys(moodState.people ?? {}).length} 个人 · 冲量 ${moodState.stats?.impulses ?? 0} 次`)
   console.log(`  听到的会话(${seenIds.length} 个):${seenIds.map((id) => id.slice(0, 12)).join('、') || '(还没有 —— 提示词段一次都没渲染过)'}`)
@@ -109,8 +109,8 @@ if (moodState) {
     console.log(`    ${new Date(row.at).toLocaleString('zh-CN', { hour12: false }).slice(5, 16)} [${row.kind}] ${row.why}`)
   }
 } else {
-  console.log('账本还不存在(~/.dsh/fish-mood/state.json)—— 插件要么没加载,要么还没跑过一轮')
+  console.log('账本还不存在(~/.dsh/everwith/state.json)—— 插件要么没加载,要么还没跑过一轮')
 }
 
-console.log(loaded ? '\nfish-mood 已加载 ✅' : '\n没在任何会话里看到 mood_* 工具 —— 多半是插件没装/没重载 ❌')
+console.log(loaded ? '\neverwith 已加载 ✅' : '\n没在任何会话里看到 mood_* 工具 —— 多半是插件没装/没重载 ❌')
 process.exit(loaded ? 0 : 2)

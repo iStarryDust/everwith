@@ -21,6 +21,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import * as voicePlugin from './lib/voice.js'
 import { capture, screenSupported } from './lib/screen.js'
+import { describeShot } from './lib/vision.js'
 import { applyAsrRoutes } from './lib/asr-route.js'
 import { isCallActive, markCallSession, setCallGlobal } from './lib/asr.js'
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
@@ -33,7 +34,7 @@ import {
   nightlyReview, pruneState, remember, saveState, screenHook, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
-import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
+import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, DEFAULT_LOOK_TEMPLATE, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
 import { DEFAULT_REMEMBER_PROMPT, REMEMBER_INSTRUCTION, appendEntry, cleanExtracted, parseEntries, readMemory, renderMemory, writeMemory } from './lib/memory.js'
 
 export const name = 'everwith'
@@ -128,9 +129,14 @@ const DEFAULTS = {
     maxEdge: 1280,
     exclude: [],
     // 「值得说一句」的闸门:宁可一天不说,也不说废话
+    // 看懂屏幕:off 只看标题 / smart 换了窗口才看 / always 每次都看
+    understand: 'smart',
+    understandCooldownMin: 5,
     speak: 'never',
     speakPerDay: 2,
     speakCooldownMin: 120,
+    // 看见的内容怎么带进提示词;留空用内置文案,可用 {doing} {trail}
+    lookTemplate: '',
   },
 }
 
@@ -544,6 +550,7 @@ export function apply(ctx, config = {}) {
     const view = snapshot(state, { now, conv: info.conv, person })
     view.crisis = state.flags?.crisis && now - state.flags.crisis.at < 2 * 3_600_000 ? state.flags.crisis : null
     view.identity = settings.identity || ''
+    view.lookTemplate = String(settings.screen?.lookTemplate ?? '')
     return { info, view }
   }
 
@@ -756,6 +763,9 @@ export function apply(ctx, config = {}) {
           nightFactor: Number(settings.screen.nightFactor) || 8,
           dailyLimit: Number(settings.screen.dailyLimit) || 120,
           speak: String(settings.screen.speak ?? 'never'),
+          speakPerDay: Number(settings.screen.speakPerDay) || 2,
+          speakCooldownMin: Number(settings.screen.speakCooldownMin) || 120,
+          lookTemplate: String(settings.screen.lookTemplate ?? '') || DEFAULT_LOOK_TEMPLATE,
         },
         state: {
           lastAt,
@@ -795,7 +805,8 @@ export function apply(ctx, config = {}) {
             if (body[key] === undefined) continue
             patch[key] = Math.max(lo, Math.min(hi, Math.round(Number(body[key]) || 0)))
           }
-          if (body.speak !== undefined) patch.speak = ['never', 'urge', 'always'].includes(String(body.speak)) ? String(body.speak) : 'never'
+          if (body.speak !== undefined) patch.speak = ['never', 'always'].includes(String(body.speak)) ? String(body.speak) : 'never'
+          if (body.lookTemplate !== undefined) patch.lookTemplate = String(body.lookTemplate).slice(0, 2000)
           writeScreenOverrides(patch)
           Object.assign(settings.screen, patch)
           state.screen = { ...(state.screen ?? {}), nextAt: 0 }
@@ -1054,7 +1065,6 @@ export function apply(ctx, config = {}) {
           const view = snapshot(state, { now })
           const plan = lookInterval(state, settings.screen, now)
           const sc = view.screen ?? {}
-          const urge = view.urge
           res.statusCode = 200
           res.setHeader('Content-Type', 'application/json')
           res.end(JSON.stringify({
@@ -1077,7 +1087,7 @@ export function apply(ctx, config = {}) {
             traits: view.traitWords ?? [],
             drives: view.driveWords ?? [],
             scene: view.scene?.word ? { word: view.scene.word, times: view.scene.events ?? 0 } : null,
-            urge: urge ? (urge.kind === 'share' ? `想把刚才看到的那个说出去${urge.note ? `(${urge.note})` : ''}` : '想被安慰两句') : '',
+            urge: '',
             today: view.today ?? [],
             memories: (view.memories ?? []).map((row) => {
               const when = new Date(Number(row.at) || 0)
@@ -1339,11 +1349,6 @@ export function apply(ctx, config = {}) {
         } else if (k === 'shamed' || k === 'sated') {
           rounds = 2 // 话少,但还没到一句都不想说
         }
-      }
-      // 想说出去的时候,多给一次
-      if (state.urges?.kind === 'share' && Number(state.urges.until) > Date.now()) {
-        rounds = Math.max(rounds, 4)
-        speed = Math.min(speed, 0.85)
       }
       return { rounds, speed, maxWaitMs: 8000 }
     }
@@ -1722,6 +1727,30 @@ export function apply(ctx, config = {}) {
           sc.fails = 0
           sc.nextAt = shot.at + lookInterval(state, settings.screen, shot.at).minutes * 60_000
           audit({ kind: 'screen-look', path: shot.path, bytes: shot.bytes, why: String(args.reason ?? '').slice(0, 60) })
+          // 这次是她自己伸手去看的:尽力也记一句,方便之后回看时对得上
+          try {
+            let who = lastAgent
+            if (!who?.session) who = pickAgent(ctx)
+            const cfg = who?.session?.requestHeader?.()?.config
+            const svc = ctx.get('llm') ?? ctx.llm
+            if (!(who && cfg && svc?.stream)) {
+              audit({ kind: 'screen-understand-skip', where: 'tool', who: Boolean(who), cfg: Boolean(cfg), svc: Boolean(svc?.stream) })
+            }
+            if (who && cfg && svc?.stream) {
+              // 看清楚用大图,给模型看懂用小图 —— 请求体差一个数量级
+              let lookPath = shot.path
+              try { lookPath = (await capture({ maxEdge: 640 })).path } catch { /* 截不到就用原图 */ }
+              const d = await describeShot({ llm: svc, attachments: ctx.get('attachments'), callConfig: cfg, sessionId: who.session.id, imagePath: lookPath, title: shot.title })
+              if (d) {
+                pushOrTouch(sc, d, shot.at, shot.title)
+                sc.lastUnderstandAt = shot.at
+                audit({ kind: 'screen-understand', where: 'tool', text: d.slice(0, 60) })
+              }
+            }
+          } catch (error) {
+            /* 工具该拿到的路径照旧返回,这句只是顺手记 */
+            audit({ kind: 'screen-understand-fail', where: 'tool', error: String(error?.message ?? error).slice(0, 120) })
+          }
           commit()
           const where = shot.title ? `屏幕上停在「${shot.title}」` : '屏幕上是亮的'
           return {
@@ -1761,6 +1790,35 @@ export function apply(ctx, config = {}) {
     }, 'everwith: heartbeat')
   }
 
+  /**
+   * 记一笔「看见过的事」。
+   * 还是同一件事(按 screenHook 归类)就只把最后看见的时间往后推,不新增条目 ——
+   * 这样连续看一下午直播,仍是一条带首尾时间的事,不是一长串重复。
+   */
+  const pushOrTouch = (sc, text, at, title) => {
+    const list = Array.isArray(sc.seen) ? sc.seen : (sc.seen = [])
+    const hook = screenHook(title) || ''
+    const last = list[list.length - 1]
+    if (last && hook && last.hook === hook) {
+      last.text = text
+      last.at = at
+      return
+    }
+    list.push({ at, text, firstAt: at, hook })
+    while (list.length > 10) list.shift()
+  }
+  /** 这一次截图要不要交给视觉模型看懂 */
+  const shouldUnderstand = (prev, title, now, sc) => {
+    const mode = String(settings.screen?.understand ?? 'smart')
+    if (mode === 'off') return false
+    const last = Number(sc.lastUnderstandAt) || 0
+    const gap = Math.max(1, Number(settings.screen.understandCooldownMin) || 5) * 60_000
+    if (now - last < gap) return false
+    if (mode === 'always') return true
+    const cur = String(title ?? '')
+    if (cur !== String(prev ?? '')) return true
+    return /报错|错误|Error|error|失败|failed|崩溃|超时/.test(cur)
+  }
   // ── 自己去看 ────────────────────────────────────────────────────────────
   // 到点了自己截一张,记下「刚才瞧见了什么」,不产生消息。
   // 节奏由情绪决定:孤单就短,烦就长,困就几乎不看。深夜不是不看,是低频。
@@ -1788,6 +1846,7 @@ export function apply(ctx, config = {}) {
       if (sc.day !== day) {
         sc.day = day
         sc.today = 0
+        sc.seen = []
       }
       const limit = Math.max(1, Number(settings.screen.dailyLimit) || 120)
       if ((Number(sc.today) || 0) >= limit) {
@@ -1804,6 +1863,36 @@ export function apply(ctx, config = {}) {
         sc.today = (Number(sc.today) || 0) + 1
         sc.fails = 0
         sc.nextAt = shot.at + lookInterval(state, settings.screen, shot.at).minutes * 60_000
+        // 换了窗口才让视觉模型看一眼,写一句话存着 —— 平时不花这个钱。
+        try {
+          if (shouldUnderstand(prevTitle, shot.title, shot.at, sc)) {
+            let agent = lastAgent
+            if (!agent?.session) agent = pickAgent(ctx)
+            const callConfig = agent?.session?.requestHeader?.()?.config
+            const llm = ctx.get('llm') ?? ctx.llm
+            if (!(agent && callConfig && llm?.stream)) {
+              audit({ kind: 'screen-understand-skip', where: 'tick', agent: Boolean(agent), cfg: Boolean(callConfig), svc: Boolean(llm?.stream) })
+            }
+            if (agent && callConfig && llm?.stream) {
+              let lookPath = shot.path
+              try { lookPath = (await capture({ maxEdge: 640 })).path } catch { /* 截不到就用原图 */ }
+              const desc = await describeShot({ llm, attachments: ctx.get('attachments'), callConfig, sessionId: agent.session.id, imagePath: lookPath, title: shot.title })
+              if (desc) {
+                pushOrTouch(sc, desc, shot.at, shot.title)
+                sc.lastUnderstandAt = shot.at
+                audit({ kind: 'screen-understand', text: desc.slice(0, 60) })
+              }
+            }
+          } else {
+            // 标题没变:不调模型,但把「最后看见」往后推 —— 不然连续看很久会被记成只看了一眼。
+            const list = Array.isArray(sc.seen) ? sc.seen : []
+            const last = list[list.length - 1]
+            if (last) last.at = shot.at
+          }
+        } catch (error) {
+          /* 看不懂就算了,截图本身照旧;记一笔免得静默失败查不到 */
+          audit({ kind: 'screen-understand-fail', error: String(error?.message ?? error).slice(0, 120) })
+        }
         // 值不值得说一句:只看标题,不额外调模型。宁可漏,不乱说。
         const hook = screenHook(shot.title)
         if (hook && sc.changed && settings.screen.speak !== 'never') {
@@ -1822,8 +1911,6 @@ export function apply(ctx, config = {}) {
             if (settings.screen.speak === 'always') {
               const said = await speakNow(speakPrompt(hook, shot.title))
               audit({ kind: 'screen-speak', ok: said.ok, error: said.error })
-            } else {
-              state.urges = { kind: 'share', until: now + 15 * 60_000, note: hook }
             }
           }
         }
@@ -1853,6 +1940,7 @@ export function apply(ctx, config = {}) {
       loop()
     }
     loop()
+    audit({ kind: 'screen-loop-start', everyMinutes: lookInterval(state, settings.screen, Date.now()).minutes })
     ctx.effect(() => () => {
       stopped = true
       rescheduleScreen = null

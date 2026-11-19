@@ -24,7 +24,7 @@ const has = (text, needle) => String(text).includes(needle)
 
 /** 起一个假宿主:同一份代码,独立的账本目录 */
 function bootHost({ config = {} } = {}) {
-  const stateDir = mkdtempSync(join(tmpdir(), 'fish-mood-state-'))
+  const stateDir = mkdtempSync(join(tmpdir(), 'everwith-state-'))
   const registered = new Map()
   const sections = []
   const effects = []
@@ -124,8 +124,8 @@ console.log(`== 注册与契约 (rev ${PLUGIN_REV}) ==`)
     const required = def.parameters.required ?? []
     check(`  ${name} 的 required 都在 properties 里`, required.every((key) => key in def.parameters.properties))
   }
-  const rules = host.sections.find((row) => row.name === 'fish-mood:rules')
-  const now = host.sections.find((row) => row.name === 'fish-mood:now')
+  const rules = host.sections.find((row) => row.name === 'everwith:rules')
+  const now = host.sections.find((row) => row.name === 'everwith:now')
   check('静态规则段已注册(order 100)', Boolean(rules) && rules.order === 100, `order=${rules?.order}`)
   check('实时状态段已注册(order 9800,放在提示词最后)', Boolean(now) && now.order === 9800, `order=${now?.order}`)
   check('两段文本都是函数(每次组装按此刻渲染)', typeof rules?.text === 'function' && typeof now?.text === 'function')
@@ -139,8 +139,8 @@ console.log('\n== 提示词:静态规则字节级不变 + 实时块固定模板 
 {
   const host = bootHost()
   const session = makeSession('sess-qq').push('在吗')
-  const first = host.renderWith('fish-mood:rules', session)
-  const second = host.renderWith('fish-mood:rules', session)
+  const first = host.renderWith('everwith:rules', session)
+  const second = host.renderWith('everwith:rules', session)
   check('规则段两次渲染完全一样(提示缓存友好)', first === second && first.length > 200, `${first.length} 字`)
   check('规则段带「别报心情」', has(first, '别报心情'))
   check('规则段带「不能用情绪留人」', has(first, '不能拿自己的情绪留人'))
@@ -149,7 +149,7 @@ console.log('\n== 提示词:静态规则字节级不变 + 实时块固定模板 
   check('规则段带危机指引(12356)', has(first, '12356'))
   check('规则段不带时间/数值(缓存友好)', !/\d{1,2}:\d{2}/.test(first) && !has(first, '/100'))
 
-  const live = host.renderWith('fish-mood:now', session)
+  const live = host.renderWith('everwith:now', session)
   check('实时块标注「系统生成」', has(live, '系统生成的状态'))
   check('实时块重述身份(抗漂移)', has(live, '你是这个角色本人'))
   check('实时块有现在/心情/性格/回复', ['现在:', '心情(这几小时):', '性格:', '回复:'].every((key) => has(live, key)))
@@ -158,9 +158,9 @@ console.log('\n== 提示词:静态规则字节级不变 + 实时块固定模板 
   const web = makeSession('sess-web', { rpcId: true }).push('在吗')
   check('Web 会话默认也注入', has(host.render(web), '【心情 · 实时】'))
   const off = bootHost({ config: { channels: { web: false } } })
-  check('channels.web=false 时 Web 不注入', off.renderWith('fish-mood:now', web) === '')
+  check('channels.web=false 时 Web 不注入', off.renderWith('everwith:now', web) === '')
   const muted = bootHost({ config: { promptEnabled: false } })
-  check('promptEnabled=false 时两块都不注入', muted.renderWith('fish-mood:now', session) === '' && muted.renderWith('fish-mood:rules', session) === '')
+  check('promptEnabled=false 时两块都不注入', muted.renderWith('everwith:now', session) === '' && muted.renderWith('everwith:rules', session) === '')
   for (const h of [host, off, muted]) {
     for (const dispose of h.effects) { try { dispose() } catch { /* disposer */ } }
     rmSync(h.stateDir, { recursive: true, force: true })
@@ -496,7 +496,7 @@ console.log('\n== 坏输入不连坐 ==')
   check('会话读不了时渲染不抛错(整份提示词不能挂)', ok)
   const brokenId = { get id() { throw new Error('boom') }, snapshotEvents: () => [] }
   ok = true
-  try { host.renderWith('fish-mood:now', brokenId) } catch { ok = false }
+  try { host.renderWith('everwith:now', brokenId) } catch { ok = false }
   check('会话 id 读不了时也不抛', ok)
   const empty = makeSession('sess-empty')
   check('没有消息时不报错、也不产生情绪', has(host.render(empty), '【心情 · 实时】') && host.readState().emotion.key === 'calm')

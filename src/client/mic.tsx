@@ -13,13 +13,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { readMic } from './mic-settings.ts'
 
-const FEED = '/api/spoon-companion/asr/feed'
-const CLOSE = '/api/spoon-companion/asr/close'
-const STATUS = '/api/spoon-companion/asr/status'
-const CALL = '/api/spoon-companion/call'
+const FEED = '/api/everwith/asr/feed'
+const CLOSE = '/api/everwith/asr/close'
+const STATUS = '/api/everwith/asr/status'
+const CALL = '/api/everwith/call'
 /** 上一次打出来的通话状态，避免心跳刷屏 */
 let lastLoggedRef: boolean | null = null
-const TAG = '[spoon-companion]'
+const TAG = '[everwith]'
 
 const TARGET_RATE = 16000
 /** 静音多久算一句说完（ms） */
@@ -418,7 +418,7 @@ export function VoiceButton(
       disabled={busy}
       aria-pressed={on}
       title={on ? (level > 0 ? '正在听你说话' : '已开麦，等一下声音') : '开始语音'}
-      data-spoon-mic={on ? 'on' : 'off'}
+      data-everwith-mic={on ? 'on' : 'off'}
       className={`sp-mic${on ? ' sp-mic--on' : ''}${busy ? ' sp-mic--busy' : ''}${level > 0 ? ' sp-mic--hearing' : ''}`}
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

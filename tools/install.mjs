@@ -1,8 +1,8 @@
-// 把 dsh-fish-mood 装进 DSH profile(幂等,可重复执行)。
+// 把 dsh-everwith 装进 DSH profile(幂等,可重复执行)。
 //
 // 做两件事:
 //   1. pnpm add link:<本包目录>  —— link 协议 = 软链,改工作区里的代码即改插件,不用重装;
-//   2. profile package.json 的 dsh.profile.bundles 里加上 dsh-fish-mood(插件的 cordis.patch.yml 负责插行)。
+//   2. profile package.json 的 dsh.profile.bundles 里加上 dsh-everwith(插件的 cordis.patch.yml 负责插行)。
 //
 // 用法: node tools/install.mjs [--profile-dir <path>] [--no-pnpm] [--check]
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
 
 const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const PACKAGE_NAME = 'dsh-fish-mood'
+const PACKAGE_NAME = 'dsh-everwith'
 
 const args = process.argv.slice(2)
 const argOf = (name, def) => {
@@ -74,9 +74,9 @@ function ensureBundle() {
   if (CHECK_ONLY) return 'bundles 里没有它'
   bundles.push(PACKAGE_NAME)
   pkg.dsh.profile.bundles = bundles
-  copyFileSync(pkgJsonPath, pkgJsonPath + '.pre-fish-mood.bak')
+  copyFileSync(pkgJsonPath, pkgJsonPath + '.pre-everwith.bak')
   writeFileSync(pkgJsonPath, JSON.stringify(pkg, null, 2) + '\n')
-  return '已加入 bundles(原文件备份 .pre-fish-mood.bak)'
+  return '已加入 bundles(原文件备份 .pre-everwith.bak)'
 }
 
 console.log(`profile : ${PROFILE_DIR}`)

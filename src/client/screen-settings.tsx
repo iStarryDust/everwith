@@ -390,26 +390,26 @@ export function ScreenSettingsSection() {
       </div>
 
       <div style={group}>
-        <div style={rowTitle}>主动说</div>
+        <div style={rowTitle}>开新窗口说</div>
         <div style={hint}>
-          看到值得说的画面（报错、直播、游戏、聊天）时怎么办：
-          <b>只看不说</b> —— 什么都不做；
-          <b>攒着</b> —— 留一条冲动，等你下次开口时带出来；
-          <b>开新窗口说</b> —— 直接新建一个对话，她开口说一句（文字，不是语音）。
+          看屏幕看到的事，一律只记在心里，不打扰你。这个开关管的是另一件事：
+          值得说的画面（报错、开播、游戏）出现时，另开一个对话，她主动说一句。
         </div>
-        {cfg ? (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {[
-              ['never', '只看不说'],
-              ['urge', '攒着'],
-              ['always', '开新窗口说'],
-            ].map(([value, label]) => (
-              <button key={value} type="button" disabled={busy || off} onClick={() => void saveScreen({ speak: value })} style={pill(cfg?.screen?.speak === value)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={cfg?.screen?.speak === 'always'}
+            disabled={busy || !cfg || off}
+            onChange={(e) => void saveScreen({ speak: e.target.checked ? 'always' : 'never' })}
+          />
+          <span>{cfg?.screen?.speak === 'always' ? '开着 —— 会另开一个窗口说' : '关着 —— 只在心里记着'}</span>
+        </label>
+        {cfg
+          ? [
+              slider('每天最多', cfg?.screen?.speakPerDay, 1, 10, '次', (n) => void saveScreen({ speakPerDay: n }), off || cfg?.screen?.speak !== 'always'),
+              slider('间隔至少', cfg?.screen?.speakCooldownMin, 30, 720, '分钟', (n) => void saveScreen({ speakCooldownMin: n }), off || cfg?.screen?.speak !== 'always'),
+            ]
+          : null}
       </div>
 
       <div style={group}>

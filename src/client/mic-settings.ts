@@ -20,7 +20,7 @@ export type MicSettings = {
   monitor: boolean
 }
 
-const KEY = 'spoon-companion:mic'
+const KEY = 'everwith:mic'
 
 export const MIC_DEFAULTS: MicSettings = {
   level: 0.008,

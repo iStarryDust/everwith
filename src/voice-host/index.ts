@@ -41,7 +41,7 @@ export const inject = ['webServer', 'systemPrompt']
 
 /**
  * 通话探针：由情绪那一侧注入，判断「现在算不算在通话」。
- * 默认 true —— 单独装语音模块时不改变原有行为；和 spoon-companion 一起用时，
+ * 默认 true —— 单独装语音模块时不改变原有行为；和 everwith 一起用时，
  * 语音播报格式只在通话中才注入，平时不写一堆标签规则干扰聊天。
  */
 let callProbe: () => boolean = () => true

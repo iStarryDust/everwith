@@ -70,6 +70,6 @@ export function apply(ctx: Context): void {
     ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'companion-voice-speak', order: 40 }, SpeakerButton),
   )
 
-  // 设置行已经搬到「Spoon 陪伴」那一页里了(见 screen-settings.tsx),
+  // 设置行已经搬到「常伴」那一页里了(见 screen-settings.tsx),
   // 这里不再往「设置 → 通用」里塞第二份。
 }

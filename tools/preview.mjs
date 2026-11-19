@@ -1,4 +1,4 @@
-// 看**此刻**的心情:读运行中的账本(~/.dsh/fish-mood/state.json),把模型读到的那段打出来。
+// 看**此刻**的心情:读运行中的账本(~/.dsh/everwith/state.json),把模型读到的那段打出来。
 //
 // 不连宿主、不重启,只是把同一份状态按同一套渲染函数跑一遍 ——
 // 用来确认「她在群里会读到什么」,或者调完参数看看效果。
@@ -19,7 +19,7 @@ const argOf = (name, def) => {
   const i = args.indexOf('--' + name)
   return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : def
 }
-const stateFile = argOf('state', join(homedir(), '.dsh', 'fish-mood', 'state.json'))
+const stateFile = argOf('state', join(homedir(), '.dsh', 'everwith', 'state.json'))
 
 let state = emptyState()
 try {
