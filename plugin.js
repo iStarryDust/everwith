@@ -84,6 +84,11 @@ const DEFAULTS = {
   /** 性格基线覆盖,例如 { neuroticism: 70 } */
   traits: {},
   /**
+   * 灵魂:每轮带在提示词最前面的那份人设(名称 / 语言 / 人格提示词)。
+   * 从 dsh-assistant-profile 并过来的那一块 —— 它只管"她是谁",不管情绪。
+   */
+  soul: { name: '', language: '', prompt: '' },
+  /**
    * 亲密尺度:0 日常(不主动提性) / 1 暧昧(可以调情,不写过程) / 2 露骨(完整)。
    * 默认 1;切换只认显式配置,不从对话里猜。
    */
@@ -166,6 +171,7 @@ export function mergeConfig(config = {}) {
   merged.feel = { ...DEFAULTS.feel, ...(config.feel ?? {}) }
   merged.intimacy = { ...DEFAULTS.intimacy, ...(config.intimacy ?? {}) }
   merged.screen = { ...DEFAULTS.screen, ...(config.screen ?? {}) }
+  merged.soul = { ...DEFAULTS.soul, ...(config.soul ?? {}) }
   merged.traits = { ...(config.traits ?? {}) }
   return merged
 }
@@ -257,6 +263,7 @@ export function apply(ctx, config = {}) {
     if (saved.multiTurn && typeof saved.multiTurn === 'object') Object.assign(settings.multiTurn, saved.multiTurn)
     if (saved.heartbeat && typeof saved.heartbeat === 'object') Object.assign(settings.heartbeat, saved.heartbeat)
     if (saved.traits && typeof saved.traits === 'object') applyTraitOverride(saved.traits)
+    if (saved.soul && typeof saved.soul === 'object') Object.assign(settings.soul, saved.soul)
   }
   applySettingsOverrides()
   /** 设置页改完节奏后,让定时器立刻按新值重排 */
@@ -743,6 +750,11 @@ export function apply(ctx, config = {}) {
         enabled: settings.enabled !== false,
         identity: String(settings.identity ?? ''),
       },
+      soul: {
+        name: String(settings.soul?.name ?? ''),
+        language: String(settings.soul?.language ?? ''),
+        prompt: String(settings.soul?.prompt ?? ''),
+      },
       intimacy: { level: Math.max(0, Math.min(2, Number(settings.intimacy?.level ?? 1))) },
       multiTurn: {
         enabled: settings.multiTurn?.enabled !== false,
@@ -801,6 +813,16 @@ export function apply(ctx, config = {}) {
               settings.identity = text
               patch.identity = text
             }
+          }
+          if (body.soul && typeof body.soul === 'object') {
+            const next = { ...(patch.soul ?? {}) }
+            for (const key of ['name', 'language', 'prompt']) {
+              if (typeof body.soul[key] !== 'string') continue
+              const value = body.soul[key].replace(/\r\n/g, '\n').trim()
+              settings.soul[key] = value
+              next[key] = value
+            }
+            patch.soul = next
           }
           if (body.intimacy && typeof body.intimacy === 'object' && body.intimacy.level !== undefined) {
             const level = Math.max(0, Math.min(2, Math.round(Number(body.intimacy.level) || 0)))
@@ -996,6 +1018,23 @@ export function apply(ctx, config = {}) {
   }
 
   ctx.inject(['systemPrompt'], (scope) => {
+    // 灵魂:整段提示词的最前面。从 assistant-profile 并过来的那一块。
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:soul',
+      order: 0,
+      text: () => {
+        if (settings.enabled === false) return ''
+        const name = String(settings.soul?.name ?? '').trim()
+        const language = String(settings.soul?.language ?? '').trim()
+        const persona = String(settings.soul?.prompt ?? '').trim()
+        if (!name && !language && !persona) return ''
+        return [
+          ...(name ? [`姓名：${name}`] : []),
+          ...(language ? [`语言：${language}`] : []),
+          ...(persona ? [persona] : []),
+        ].join('\n\n')
+      },
+    }), 'fish-mood: soul section')
     scope.effect(() => scope.systemPrompt.section({
       name: 'fish-mood:rules',
       // 0 = 人设,500 = plan 策略:规则紧跟人设

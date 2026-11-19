@@ -33,6 +33,7 @@ type SettingsSnap = {
   ok: boolean
   now: number
   general: { enabled: boolean; identity: string }
+  soul: { name: string; language: string; prompt: string }
   intimacy: { level: number }
   multiTurn: { enabled: boolean; maxRounds: number }
   heartbeat: { enabled: boolean; everyMinutes: number }
@@ -97,6 +98,7 @@ export function ScreenSettingsSection() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [identityDraft, setIdentityDraft] = useState<string | null>(null)
+  const [soulDraft, setSoulDraft] = useState<{ name: string; language: string; prompt: string } | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
   const [mic, setMic] = useState<MicSettings>(() => readMic())
 
@@ -241,6 +243,61 @@ export function ScreenSettingsSection() {
           ) : (
             <div style={hint}>读状态中…</div>
           )}
+        </div>
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>灵魂</div>
+        <div style={hint}>
+          她是谁 —— 每轮带在提示词最前面的那份人设。只管"她是什么样的人"，情绪和身体归下面的角色面板管。
+        </div>
+        <label style={{ display: 'grid', gridTemplateColumns: '56px 1fr', alignItems: 'center', gap: 10 }}>
+          <span style={{ opacity: 0.8 }}>姓名</span>
+          <input
+            style={input}
+            value={soulDraft?.name ?? cfg?.soul.name ?? ''}
+            placeholder="她的名字"
+            disabled={busy || !cfg}
+            onChange={(e) => setSoulDraft({ name: e.target.value, language: soulDraft?.language ?? cfg?.soul.language ?? '', prompt: soulDraft?.prompt ?? cfg?.soul.prompt ?? '' })}
+            onBlur={() => {
+              if (!soulDraft) return
+              void saveSettings({ soul: { name: soulDraft.name } })
+              setSoulDraft(null)
+            }}
+          />
+        </label>
+        <label style={{ display: 'grid', gridTemplateColumns: '56px 1fr', alignItems: 'center', gap: 10 }}>
+          <span style={{ opacity: 0.8 }}>语言</span>
+          <input
+            style={input}
+            value={soulDraft?.language ?? cfg?.soul.language ?? ''}
+            placeholder="中文"
+            disabled={busy || !cfg}
+            onChange={(e) => setSoulDraft({ name: soulDraft?.name ?? cfg?.soul.name ?? '', language: e.target.value, prompt: soulDraft?.prompt ?? cfg?.soul.prompt ?? '' })}
+            onBlur={() => {
+              if (!soulDraft) return
+              void saveSettings({ soul: { language: soulDraft.language } })
+              setSoulDraft(null)
+            }}
+          />
+        </label>
+        <div style={{ display: 'grid', gap: 6 }}>
+          <span style={{ opacity: 0.8 }}>人格提示词</span>
+          <textarea
+            style={{ ...input, minHeight: 220, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={soulDraft?.prompt ?? cfg?.soul.prompt ?? ''}
+            placeholder="她是什么样的人、怎么说话、有什么习惯……"
+            disabled={busy || !cfg}
+            onChange={(e) => setSoulDraft({ name: soulDraft?.name ?? cfg?.soul.name ?? '', language: soulDraft?.language ?? cfg?.soul.language ?? '', prompt: e.target.value })}
+            onBlur={() => {
+              if (!soulDraft) return
+              void saveSettings({ soul: { prompt: soulDraft.prompt } })
+              setSoulDraft(null)
+            }}
+          />
+          <div style={hint}>
+            失焦即保存，下一句就生效。字数 {((soulDraft?.prompt ?? cfg?.soul.prompt ?? '') as string).length}
+          </div>
         </div>
       </div>
 
