@@ -11,6 +11,22 @@ import { MIC_DEFAULTS, readMic, writeMic, type MicSettings } from './mic-setting
 
 const API_SETTINGS = '/api/spoon-companion/settings'
 const API_SCREEN = '/api/spoon-companion/screen'
+const API_NOW = '/api/spoon-companion/now'
+
+type NowSnap = {
+  ok: boolean
+  now: number
+  enabled: boolean
+  emotion: { name: string; intensity: number; tier: string; why: string }
+  mood: { label: string; reason: string; tint: number; energy: number }
+  traits: string[]
+  drives: string[]
+  scene: { word: string; times: number } | null
+  urge: string
+  today: string[]
+  memories: string[]
+  screen: { lastAt: number; title: string; today: number; everyMinutes: number; night: boolean; inMinutes: number }
+}
 
 type TraitRow = { key: string; name: string; base: number; value: number }
 type SettingsSnap = {
@@ -77,6 +93,7 @@ function ago(at: number, now: number) {
 export function ScreenSettingsSection() {
   const [cfg, setCfg] = useState<SettingsSnap | null>(null)
   const [screen, setScreen] = useState<ScreenSnap | null>(null)
+  const [nowSnap, setNowSnap] = useState<NowSnap | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [identityDraft, setIdentityDraft] = useState<string | null>(null)
@@ -89,12 +106,14 @@ export function ScreenSettingsSection() {
 
   const load = useCallback(async () => {
     try {
-      const [a, b] = await Promise.all([
+      const [a, b, c] = await Promise.all([
         fetch(API_SETTINGS, { headers: { accept: 'application/json' } }).then((r) => r.json()),
         fetch(API_SCREEN, { headers: { accept: 'application/json' } }).then((r) => r.json()),
+        fetch(API_NOW, { headers: { accept: 'application/json' } }).then((r) => r.json()),
       ])
       if ((a as SettingsSnap)?.ok) setCfg(a as SettingsSnap)
       if ((b as ScreenSnap)?.ok) setScreen(b as ScreenSnap)
+      if ((c as NowSnap)?.ok) setNowSnap(c as NowSnap)
       setError('')
     } catch (reason) {
       setError(String(reason))
@@ -147,6 +166,82 @@ export function ScreenSettingsSection() {
           <input type="checkbox" checked={cfg?.general.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ general: { enabled: e.target.checked } })} />
           <span>{cfg?.general.enabled ? '开着' : '暂停中'}</span>
         </label>
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>角色</div>
+        <div style={hint}>她现在什么样 —— 情绪、身体、刚才瞧见的事，都在这一张里。</div>
+        <div style={card}>
+          {nowSnap ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>{nowSnap.emotion.name}</span>
+                <span style={{ opacity: 0.7, fontSize: 12 }}>
+                  {nowSnap.emotion.tier} {nowSnap.emotion.intensity}/100
+                </span>
+                {nowSnap.emotion.why ? <span style={{ opacity: 0.6, fontSize: 12 }}>· {nowSnap.emotion.why}</span> : null}
+              </div>
+              <div style={kv}>
+                <span style={{ opacity: 0.6 }}>心情</span>
+                <span>
+                  {nowSnap.mood.label}
+                  {nowSnap.mood.reason ? ` —— 最近是${nowSnap.mood.reason}` : ''}
+                </span>
+              </div>
+              <div style={kv}>
+                <span style={{ opacity: 0.6 }}>性格</span>
+                <span>{nowSnap.traits.join('、') || '—'}</span>
+              </div>
+              <div style={kv}>
+                <span style={{ opacity: 0.6 }}>身体</span>
+                <span>{nowSnap.drives.join('、') || '—'}</span>
+              </div>
+              {nowSnap.urge ? (
+                <div style={kv}>
+                  <span style={{ opacity: 0.6 }}>想做的事</span>
+                  <span>{nowSnap.urge}</span>
+                </div>
+              ) : null}
+              {nowSnap.scene ? (
+                <div style={kv}>
+                  <span style={{ opacity: 0.6 }}>场景</span>
+                  <span>
+                    {nowSnap.scene.word}
+                    {nowSnap.scene.times > 1 ? ` · 第 ${nowSnap.scene.times} 次` : ''}
+                  </span>
+                </div>
+              ) : null}
+              <div style={kv}>
+                <span style={{ opacity: 0.6 }}>刚才看见</span>
+                <span>
+                  {nowSnap.screen.title || '还没看过'}
+                  {nowSnap.screen.lastAt ? ` · ${ago(nowSnap.screen.lastAt, nowSnap.now)}` : ''}
+                </span>
+              </div>
+              <div style={kv}>
+                <span style={{ opacity: 0.6 }}>看屏幕</span>
+                <span>
+                  今天 {nowSnap.screen.today} 次 · 下次约 {nowSnap.screen.inMinutes || 0} 分钟后（节奏{' '}
+                  {nowSnap.screen.everyMinutes} 分钟{nowSnap.screen.night ? '，深夜' : ''}）
+                </span>
+              </div>
+              {nowSnap.today.length ? (
+                <div style={kv}>
+                  <span style={{ opacity: 0.6 }}>今天</span>
+                  <span>{nowSnap.today.join('；')}</span>
+                </div>
+              ) : null}
+              {nowSnap.memories.length ? (
+                <div style={kv}>
+                  <span style={{ opacity: 0.6 }}>心里挂着</span>
+                  <span>{nowSnap.memories.join('；')}</span>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div style={hint}>读状态中…</div>
+          )}
+        </div>
       </div>
 
       <div style={group}>
@@ -206,37 +301,6 @@ export function ScreenSettingsSection() {
             ))}
           </div>
         ) : null}
-      </div>
-
-      <div style={group}>
-        <div style={rowTitle}>现在</div>
-        <div style={card}>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>刚才看见</span>
-            <span>{sc?.title ? sc.title : '还没看过'}</span>
-          </div>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>看的时间</span>
-            <span>{screen ? ago(sc?.lastAt ?? 0, screen.now) : '—'}</span>
-          </div>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>今天</span>
-            <span>{sc?.today ?? 0} 次</span>
-          </div>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>下一次</span>
-            <span>
-              {sc?.inMinutes ? `约 ${sc.inMinutes} 分钟后` : '随时'}
-              {sc?.everyMinutes ? `（当前节奏 ${sc.everyMinutes} 分钟${sc.night ? '，深夜' : ''}）` : ''}
-            </span>
-          </div>
-          {sc && sc.fails > 0 ? (
-            <div style={kv}>
-              <span style={{ opacity: 0.6 }}>状态</span>
-              <span style={{ color: '#d08a3a' }}>连续失败 {sc.fails} 次，正在退避</span>
-            </div>
-          ) : null}
-        </div>
       </div>
 
       <div style={group}>

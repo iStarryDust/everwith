@@ -853,6 +853,68 @@ export function apply(ctx, config = {}) {
     }
   }, 'spoon-companion: settings route')
 
+  /** 角色面板:设置页顶上那张卡,一眼看到她现在的样子 */
+  ctx.effect(() => {
+    const webServer = ctx.webServer ?? ctx.get('webServer')
+    if (!webServer?.register) return undefined
+    const route = {
+      kind: 'exact',
+      path: '/api/spoon-companion/now',
+      handler: async (_req, res) => {
+        try {
+          const now = Date.now()
+          decay(state, now)
+          const view = snapshot(state, { now })
+          const plan = lookInterval(state, settings.screen, now)
+          const sc = view.screen ?? {}
+          const urge = view.urge
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({
+            ok: true,
+            now,
+            enabled: settings.enabled !== false,
+            identity: String(settings.identity ?? ''),
+            emotion: {
+              name: view.emotion.def.name,
+              intensity: Math.round(view.emotion.intensity),
+              tier: view.emotion.tier.label,
+              why: view.emotion.why || '',
+            },
+            mood: {
+              label: view.mood.label,
+              reason: view.mood.reason || '',
+              tint: Math.round(view.mood.tint ?? 0),
+              energy: Math.round(view.mood.energy ?? 0),
+            },
+            traits: view.traitWords ?? [],
+            drives: view.driveWords ?? [],
+            scene: view.scene?.word ? { word: view.scene.word, times: view.scene.events ?? 0 } : null,
+            urge: urge ? (urge.kind === 'share' ? `想把刚才看到的那个说出去${urge.note ? `(${urge.note})` : ''}` : '想被安慰两句') : '',
+            today: view.today ?? [],
+            memories: (view.memories ?? []).map((row) => `${row.text}${row.fresh ? '(今天)' : '(前几天)'}`),
+            screen: {
+              lastAt: Number(sc.lastAt) || 0,
+              title: String(sc.title ?? ''),
+              today: Number(sc.today) || 0,
+              everyMinutes: plan.minutes,
+              night: plan.night,
+              inMinutes: Number(sc.nextAt) > now ? Math.round((Number(sc.nextAt) - now) / 60_000) : 0,
+            },
+          }))
+        } catch (error) {
+          res.statusCode = 500
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ ok: false, error: String(error?.message ?? error) }))
+        }
+      },
+    }
+    const dispose = webServer.register(route)
+    return () => {
+      try { dispose?.() } catch { /* ignore */ }
+    }
+  }, 'spoon-companion: now route')
+
   /**
    * 这个会话现在在不在通话里。
    * **只认客户端那把开关** —— 点了通话才算。不拿"有没有在送音频"当证据:
@@ -1419,7 +1481,11 @@ export function apply(ctx, config = {}) {
       const now = Date.now()
       const plan = lookInterval(state, settings.screen, now)
       const at = Number(state.screen?.nextAt) || 0
-      const due = at > now ? at : now + plan.minutes * 60_000
+      const intervalMs = plan.minutes * 60_000
+      // 关机 / 挂起很久回来:不是从"现在"重新数一整个间隔,而是很快就去看一眼
+      // —— 她该发现你回来了,而不是让你再等十几分钟。
+      const overdue = at > 0 && now - at > intervalMs * 2
+      const due = at > now ? at : overdue ? now + 45_000 : now + intervalMs
       return Math.max(20_000, Math.min(due - now, 60 * 60_000))
     }
 
