@@ -926,7 +926,8 @@ export function apply(ctx, config = {}) {
               next.rules = rules
             }
             if (body.multiTurn.maxRounds !== undefined) {
-              const rounds = Math.max(1, Math.min(6, Math.round(Number(body.multiTurn.maxRounds) || 3)))
+              const raw = Number(body.multiTurn.maxRounds)
+              const rounds = Number.isFinite(raw) ? Math.max(1, Math.min(6, Math.round(raw))) : 3
               settings.multiTurn = { ...(settings.multiTurn ?? {}), maxRounds: rounds }
               next.maxRounds = rounds
             }
@@ -1206,7 +1207,7 @@ export function apply(ctx, config = {}) {
   ctx.inject(['agents'], (scope) => {
     const turns = settings.multiTurn ?? {}
     if (turns.enabled === false) return
-    const maxRounds = Math.max(1, Number(turns.maxRounds) || 3)
+    const maxRounds = Number.isFinite(Number(turns.maxRounds)) ? Math.max(1, Math.round(Number(turns.maxRounds))) : 3
     // 兜底值必须和提示词里写的标记一致。
     // 原来兜底是 [[more]]，提示词写 <!--more-->，一旦 settings 没带上 marker 就永远匹配不上。
     const marker = String(turns.marker || '<!--more-->')
