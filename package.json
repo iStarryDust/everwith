@@ -1,7 +1,7 @@
 {
-  "name": "@istarry/spoon-companion",
-  "version": "0.9.19",
-  "description": "让对话角色有自己的内心和声音：心情情绪随时间和对话自己演，回复一条一条发出来，能念出声（DeepSeek / 小米 MiMo），也能听得见——点麦克风说话，本地识别后直接发送。四块都能单独关。",
+  "name": "@istarry/dsh-everwith",
+  "version": "1.0.0",
+  "description": "给对话角色一副身体、一副嗓子，和一段会自己走的时间：情绪随时间和对话自己演，回复一条一条发出来，能念出声也能听见说话，还会自己瞟一眼屏幕。五块能力都能单独关。",
   "type": "module",
   "main": "plugin.js",
   "icon": "icon.svg",
@@ -54,17 +54,17 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iStarryDust/spoon-mood.git"
+    "url": "git+https://github.com/iStarryDust/everwith.git"
   },
-  "homepage": "https://github.com/iStarryDust/spoon-mood#readme",
+  "homepage": "https://github.com/iStarryDust/everwith#readme",
   "bugs": {
-    "url": "https://github.com/iStarryDust/spoon-mood/issues"
+    "url": "https://github.com/iStarryDust/everwith/issues"
   },
   "author": "ChencLi819 (upstream) / istarry (fork)",
   "license": "MIT",
   "upstream": {
-    "name": "dsh-fish-mood",
-    "repository": "https://github.com/ChencLi819/dsh-fish-mood",
+    "name": "dsh-everwith",
+    "repository": "https://github.com/ChencLi819/dsh-everwith",
     "license": "MIT"
   },
   "devDependencies": {

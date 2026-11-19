@@ -1,20 +1,23 @@
-# @istarry/spoon-mood —— bundle patch
-# fork 自 ChencLi819/dsh-fish-mood (MIT)。
+# @istarry/dsh-everwith · 常伴
 #
-# 与原版的差异（见 README 的 Fork 说明）：
-#   1. 会话标签修正：剥掉 `session-` 前缀后再取 id 片段，
-#      原版 `sessionId.slice(0,8)` 只会得到「会话 session-」。
-#   2. 包名改为 @istarry/spoon-mood，可与原版并存。
+# 一个包里装五块能力：
+#   1. 情绪与身体 —— 心情、情绪、饿困、亲密度在后台自己演变，附四个工具
+#   2. 分条说话   —— 像发消息一样一条一句，节奏跟着情绪走
+#   3. 语音输出   —— 把回复念出来（DeepSeek 官方 TTS / 小米 MiMo，支持音色克隆）
+#   4. 语音输入   —— 点麦克风说话，本机识别后直接发送
+#   5. 看屏幕     —— 隔一阵瞟一眼，看得懂就记住；看不等于说
 #
-# 内部服务名 / 提示词 section 名 / 状态目录**保持 fish-mood 不变**：
-#   - 状态目录沿用 ~/.dsh/fish-mood，已有情绪数据不会丢
-#   - section 名沿用 fish-mood:rules / fish-mood:now，identity 配置继续生效
+# 安装后插件实例 id 是 everwith，状态目录是 ~/.dsh/everwith。
+# 想覆盖默认值，在自己的 profile 里补一段：
 #
-# 想覆盖默认值，在自己的 profile 的 cordis.patch.yml 里补一行：
-#   - id: fish-mood
+#   - id: everwith
 #     config:
-#       identity: 我就是我，不是在演谁；情绪是真的。
-#       heartbeat: { lifeChance: 0.05 }
+#       identity: 我就是我。
+#       multiTurn: { maxRounds: 2 }
+#       screen: { enabled: true, speak: never }
+#
+# 人格提示词默认是空的，插件不自带任何人设。
+
 - insert:
-    - id: fish-mood
-      name: "@istarry/spoon-mood"
+    - id: everwith
+      name: "@istarry/dsh-everwith"

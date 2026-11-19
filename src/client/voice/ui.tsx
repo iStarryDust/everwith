@@ -319,7 +319,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
   // 播报格式规范存在情绪插件那边(settings.mimoSpeech),这里直接读写
   useEffect(() => {
     let alive = true
-    void fetch('/api/spoon-companion/settings', { headers: { accept: 'application/json' } })
+    void fetch('/api/everwith/settings', { headers: { accept: 'application/json' } })
       .then((r) => r.json())
       .then((d) => {
         if (!alive) return
@@ -332,7 +332,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
 
   const saveSpeech = async (text: string) => {
     try {
-      await fetch('/api/spoon-companion/settings', {
+      await fetch('/api/everwith/settings', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mimoSpeech: text }),
@@ -396,8 +396,8 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
 
   const engineName = isMimo ? '小米 MiMo' : 'DeepSeek'
   const voiceName = isMimo
-    ? (state?.mimo.useClone ? '克隆音色' : (state?.mimo.voices.find((v) => v.id === state?.mimo.voice)?.name ?? '—'))
-    : (state?.deepseek.voices.find((v) => v.id === state?.deepseek.voice)?.name ?? '—')
+    ? (state?.mimo?.useClone ? '克隆音色' : (state?.mimo?.voices.find((v) => v.id === state?.mimo?.voice)?.name ?? '—'))
+    : (state?.deepseek?.voices.find((v) => v.id === state?.deepseek?.voice)?.name ?? '—')
 
   const desc = !enabled
     ? '已关闭'
@@ -469,7 +469,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                   autoComplete="off"
                   onChange={(e) => setMimoKeyDraft(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && mimoKeyDraft.trim()) void patch({ mimoKey: mimoKeyDraft.trim() }, 'API Key 已保存').then(() => setMimoKeyDraft('')) }}
-                  placeholder={state?.mimo.hasKey ? `已保存 · 末四位 ${state.mimo.keyTail}` : '填 MiMo API Key'}
+                  placeholder={state?.mimo?.hasKey ? `已保存 · 末四位 ${state.mimo.keyTail}` : '填 MiMo API Key'}
                 />
                 <button type="button" className="cv-primary" onClick={() => { const k = mimoKeyDraft.trim(); if (k) void patch({ mimoKey: k }, 'API Key 已保存').then(() => setMimoKeyDraft('')) }} disabled={busy !== '' || mimoKeyDraft.trim() === ''}>保存</button>
               </div>
@@ -487,7 +487,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                   autoComplete="off"
                   onChange={(e) => setDsKeyDraft(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && dsKeyDraft.trim()) void patch({ deepseekKey: dsKeyDraft.trim() }, 'API Key 已保存').then(() => setDsKeyDraft('')) }}
-                  placeholder={state?.deepseek.hasKey ? `已保存 · 末四位 ${state.deepseek.keyTail}` : 'sk-...'}
+                  placeholder={state?.deepseek?.hasKey ? `已保存 · 末四位 ${state.deepseek.keyTail}` : 'sk-...'}
                 />
                 <button type="button" className="cv-primary" onClick={() => { const k = dsKeyDraft.trim(); if (k) void patch({ deepseekKey: k }, 'API Key 已保存').then(() => setDsKeyDraft('')) }} disabled={busy !== '' || dsKeyDraft.trim() === ''}>保存</button>
               </div>
@@ -504,8 +504,8 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                   value={styleDraft}
                   spellCheck={false}
                   onChange={(e) => setStyleDraft(e.target.value)}
-                  onBlur={() => { if (styleDraft !== (state?.mimo.style ?? '')) void patch({ mimoStyle: styleDraft }, '风格已保存') }}
-                  placeholder={state?.mimo.defaultStyle ?? '少女音，语气温柔，自然语速，气声轻微'}
+                  onBlur={() => { if (styleDraft !== (state?.mimo?.style ?? '')) void patch({ mimoStyle: styleDraft }, '风格已保存') }}
+                  placeholder={state?.mimo?.defaultStyle ?? '少女音，语气温柔，自然语速，气声轻微'}
                 />
                 <div className="cv-hint">
                   留空 = 不发送风格指令，交给服务端默认。点「清空风格」可一键清空。
@@ -535,7 +535,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                 </div>
                 <div className="cv-actions">
                   <button type="button" className="cv-ghost" onClick={() => { setStyleDraft(''); void patch({ mimoStyle: '' }, '已清空风格（中性自然）') }} disabled={busy !== ''}>清空风格</button>
-                  <button type="button" className="cv-ghost" onClick={() => { setStyleDraft(state?.mimo.defaultStyle ?? ''); void patch({ mimoStyle: state?.mimo.defaultStyle ?? '' }, '已恢复默认风格') }} disabled={busy !== ''}>恢复默认</button>
+                  <button type="button" className="cv-ghost" onClick={() => { setStyleDraft(state?.mimo?.defaultStyle ?? ''); void patch({ mimoStyle: state?.mimo?.defaultStyle ?? '' }, '已恢复默认风格') }} disabled={busy !== ''}>恢复默认</button>
                 </div>
               </div>
 
@@ -543,13 +543,13 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                 <label className="cv-check">
                   <input
                     type="checkbox"
-                    checked={state?.mimo.useClone ?? false}
+                    checked={state?.mimo?.useClone ?? false}
                     onChange={(e) => void patch({ mimoUseClone: e.target.checked }, e.target.checked ? '已切到克隆音色' : '已切回预置音色')}
-                    disabled={busy !== '' || !(state?.mimo.hasSample ?? false)}
+                    disabled={busy !== '' || !(state?.mimo?.hasSample ?? false)}
                   />
                   <span>使用克隆音色（基于上传的音频样本）</span>
                 </label>
-                {!state?.mimo.hasSample ? <div className="cv-hint">先上传一段清晰人声（wav / mp3，≥1 秒）才能开启。</div> : null}
+                {!state?.mimo?.hasSample ? <div className="cv-hint">先上传一段清晰人声（wav / mp3，≥1 秒）才能开启。</div> : null}
               </div>
 
               <div className="cv-field">
@@ -563,7 +563,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                     onChange={(e) => { onPickFile(e.target.files?.[0]); e.target.value = '' }}
                   />
                   <button type="button" className="cv-primary" onClick={() => fileInput.current?.click()} disabled={busy !== ''}>选择音频文件</button>
-                  {state?.mimo.hasSample ? (
+                  {state?.mimo?.hasSample ? (
                     <>
                       <span className="cv-msg">{state.mimo.sample}</span>
                       <button type="button" className="cv-ghost" onClick={() => void run('sample', async () => { await api.clearSample(); await refresh(); setMsg('✓ 样本已删除，已切回预置音色'); setMsgOk(true) })} disabled={busy !== ''}>删除样本</button>
@@ -574,14 +574,14 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
               </div>
 
               <div className="cv-field">
-                <label>预置音色{state?.mimo.useClone ? '（克隆模式下不生效）' : ''}</label>
+                <label>预置音色{state?.mimo?.useClone ? '（克隆模式下不生效）' : ''}</label>
                 <select
                   className="cv-select"
-                  value={state?.mimo.voice ?? '冰糖'}
+                  value={state?.mimo?.voice ?? '冰糖'}
                   onChange={(e) => void patch({ mimoVoice: e.target.value }, '音色已切换')}
-                  disabled={busy !== '' || (state?.mimo.useClone ?? false)}
+                  disabled={busy !== '' || (state?.mimo?.useClone ?? false)}
                 >
-                  {(state?.mimo.voices ?? []).map((v) => (
+                  {(state?.mimo?.voices ?? []).map((v) => (
                     <option key={v.id} value={v.id}>{v.name}</option>
                   ))}
                 </select>
@@ -595,11 +595,11 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
               <label>音色</label>
               <select
                 className="cv-select"
-                value={state?.deepseek.voice ?? 'stella'}
+                value={state?.deepseek?.voice ?? 'stella'}
                 onChange={(e) => void patch({ deepseekVoice: e.target.value }, '音色已切换')}
                 disabled={busy !== ''}
               >
-                {(state?.deepseek.voices ?? []).map((v) => (
+                {(state?.deepseek?.voices ?? []).map((v) => (
                   <option key={v.id} value={v.id}>{v.name}</option>
                 ))}
               </select>

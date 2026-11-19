@@ -1,4 +1,4 @@
-// dsh-fish-mood —— 给 agent 一副会变化的心情:情绪有半衰期,心情影响说话方式。
+// dsh-everwith —— 给 agent 一副会变化的心情:情绪有半衰期,心情影响说话方式。
 //
 // 三层结构(细节在 lib/):
 //   性格 traits  → 心情 mood → 情绪 emotion
@@ -7,8 +7,8 @@
 // 这一层负责:往系统提示词里挂两块、注册三个工具、跑心跳、判会话身份。
 //
 // 两块提示词(拆开是为了提示缓存友好:静态段字节不变,实时段固定在最后):
-//   fish-mood:rules  order 100  —— 静态规则,字节级不变(提示缓存友好)
-//   fish-mood:now    order 9800 —— 实时状态块,固定模板,放在整段提示词的最后
+//   everwith:rules  order 100  —— 静态规则,字节级不变(提示缓存友好)
+//   everwith:now    order 9800 —— 实时状态块,固定模板,放在整段提示词的最后
 //
 // 三个工具:
 //   mood_now   看自己现在什么心情(三层 + 为什么 + 关系 + 记忆)
@@ -35,7 +35,7 @@ import {
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
 import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
 
-export const name = 'fish-mood'
+export const name = 'everwith'
 /** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
 // tools/agents: 情绪与分条说话；webServer/systemPrompt: 语音宿主（路由 + 提示词段落）
 export const inject = ['tools', 'agents', 'webServer', 'systemPrompt']
@@ -209,12 +209,12 @@ export function mergeConfig(config = {}) {
 
 export function apply(ctx, config = {}) {
   const settings = mergeConfig(config)
-  const stateDir = settings.stateDir || join(homedir(), '.dsh', 'fish-mood')
+  const stateDir = settings.stateDir || join(homedir(), '.dsh', 'everwith')
   const log = (level, text) => {
     try {
       const logger = ctx.logger ?? ctx.get?.('logger')
       if (logger && typeof logger[level] === 'function') logger[level](text)
-      else console.log(`[fish-mood] ${text}`)
+      else console.log(`[everwith] ${text}`)
     } catch {
       /* 日志失败不连坐 */
     }
@@ -561,7 +561,7 @@ export function apply(ctx, config = {}) {
   /**
    * 正在通话的会话。
    *
-   * 由客户端那个通话按钮通过 POST /api/spoon-companion/call 写进来，
+   * 由客户端那个通话按钮通过 POST /api/everwith/call 写进来，
    * 点一下接通、再点一下挂断 —— 真正的"实时开/挂"，不靠消息前缀也不靠超时。
    * 只放内存：通话是短时状态，重启就该断开，不需要持久化。
    */
@@ -589,7 +589,7 @@ export function apply(ctx, config = {}) {
     // (之前拆成两个 register,第二个会被判重复而注册失败,POST 一直没生效。)
     const route = {
       kind: 'exact',
-      path: '/api/spoon-companion/call',
+      path: '/api/everwith/call',
       handler: async (req, res) => {
         if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
           const query = String(req?.url ?? '')
@@ -630,7 +630,7 @@ export function apply(ctx, config = {}) {
       log('warn', `通话按钮通道注册失败:${error instanceof Error ? error.message : String(error)}`)
       return undefined
     }
-  }, 'spoon-companion: call route')
+  }, 'everwith: call route')
 
   /**
    * 开一个新窗口说一句。
@@ -701,7 +701,7 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         log('warn', `极简模式:限制工具失败 ${error instanceof Error ? error.message : String(error)}`)
       }
-    }), 'fish-mood: minimal restrict')
+    }), 'everwith: minimal restrict')
   }
 
   /** 看屏幕:设置页读这个拿配置和状态,写完立刻生效,不用重启 */
@@ -747,7 +747,7 @@ export function apply(ctx, config = {}) {
     // DSH 的路由按 (kind, path) 去重,不区分 method —— 所以 GET / POST 必须在同一个 handler 里分支
     const route = {
       kind: 'exact',
-      path: '/api/spoon-companion/screen',
+      path: '/api/everwith/screen',
       handler: async (req, res) => {
         if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
           reply(res, 200, snapshotOf())
@@ -786,7 +786,7 @@ export function apply(ctx, config = {}) {
     return () => {
       try { dispose?.() } catch { /* ignore */ }
     }
-  }, 'spoon-companion: screen route')
+  }, 'everwith: screen route')
 
   /** 设置页:总开关、身份、尺度、多轮、心跳、性格 —— 读写都在这儿 */
   ctx.effect(() => {
@@ -852,7 +852,7 @@ export function apply(ctx, config = {}) {
     })
     const route = {
       kind: 'exact',
-      path: '/api/spoon-companion/settings',
+      path: '/api/everwith/settings',
       handler: async (req, res) => {
         if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
           reply(res, 200, snapshotOf())
@@ -966,7 +966,7 @@ export function apply(ctx, config = {}) {
     return () => {
       try { dispose?.() } catch { /* ignore */ }
     }
-  }, 'spoon-companion: settings route')
+  }, 'everwith: settings route')
 
   /** 角色面板:设置页顶上那张卡,一眼看到她现在的样子 */
   ctx.effect(() => {
@@ -974,7 +974,7 @@ export function apply(ctx, config = {}) {
     if (!webServer?.register) return undefined
     const route = {
       kind: 'exact',
-      path: '/api/spoon-companion/now',
+      path: '/api/everwith/now',
       handler: async (_req, res) => {
         try {
           const now = Date.now()
@@ -1033,7 +1033,7 @@ export function apply(ctx, config = {}) {
     return () => {
       try { dispose?.() } catch { /* ignore */ }
     }
-  }, 'spoon-companion: now route')
+  }, 'everwith: now route')
 
   /**
    * 这个会话现在在不在通话里。
@@ -1118,7 +1118,7 @@ export function apply(ctx, config = {}) {
   ctx.inject(['systemPrompt'], (scope) => {
     // 灵魂:整段提示词的最前面。从 assistant-profile 并过来的那一块。
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:soul',
+      name: 'everwith:soul',
       order: 0,
       text: () => {
         if (settings.enabled === false) return ''
@@ -1132,10 +1132,10 @@ export function apply(ctx, config = {}) {
           ...(persona ? [persona] : []),
         ].join('\n\n')
       },
-    }), 'fish-mood: soul section')
+    }), 'everwith: soul section')
     // 极简模式:紧跟在人设后面说一句"只聊天"
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:minimal',
+      name: 'everwith:minimal',
       order: 1,
       text: () => {
         if (settings.enabled === false) return ''
@@ -1150,23 +1150,23 @@ export function apply(ctx, config = {}) {
           '要文件、要命令、要搜网，一律没有。需要什么就直接问。',
         ].join('\n')
       },
-    }), 'fish-mood: minimal section')
+    }), 'everwith: minimal section')
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:rules',
+      name: 'everwith:rules',
       // 0 = 人设,500 = plan 策略:规则紧跟人设
       order: 100,
       text: rulesSectionText,
-    }), 'fish-mood: rules section')
+    }), 'everwith: rules section')
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:now',
+      name: 'everwith:now',
       // 9800:整段提示词的最后(9900 是结构化输出)。放最后是为了少打断前缀缓存
       order: 9800,
       text: stateSectionText,
-    }), 'fish-mood: state section')
+    }), 'everwith: state section')
 
     // 场景:在电话里 / 坐在旁边。独立于分条说话 —— 分条关掉也照样跟着通话状态换。
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:scene',
+      name: 'everwith:scene',
       order: 290,
       text: (context) => {
         if (settings.enabled === false) return ''
@@ -1175,10 +1175,10 @@ export function apply(ctx, config = {}) {
         if (!channel || !channelEnabled(channel, settings.channels)) return ''
         return sceneText(inCallOf(context), settings.scene)
       },
-    }), 'fish-mood: scene section')
+    }), 'everwith: scene section')
 
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:turns',
+      name: 'everwith:turns',
       // 300:放在前段,别往末尾挤。
       // 试过挪到 9870(紧贴对话),结果连续说话完全不触发了 ——
       // 这段是"怎么写"的格式要求,不是"现在是什么状态",
@@ -1189,14 +1189,14 @@ export function apply(ctx, config = {}) {
         if (settings.multiTurn?.enabled === false) return ''
         return multiTurnText(settings.multiTurn?.rules)
       },
-    }), 'fish-mood: turns section')
+    }), 'everwith: turns section')
     scope.effect(() => scope.systemPrompt.section({
-      name: 'fish-mood:call',
+      name: 'everwith:call',
       // 9890:压在所有块之后,紧贴对话 —— 通话时"回短句"这条最容易被无视,
       // 离得越近越管用。(9900 留给结构化输出,别占)
       order: 9890,
       text: callSectionText,
-    }), 'fish-mood: call section')
+    }), 'everwith: call section')
   })
 
   // ── 分条说话 ────────────────────────────────────────────────────────────
@@ -1335,7 +1335,7 @@ export function apply(ctx, config = {}) {
         counted.clear()
         off()
       }
-    }, 'fish-mood: multi-turn')
+    }, 'everwith: multi-turn')
   })
 
   // ── 工具 ────────────────────────────────────────────────────────────────
@@ -1371,7 +1371,7 @@ export function apply(ctx, config = {}) {
           const lastReal = realUsers[realUsers.length - 1]
           const pending = session ? readUserMessages(session, { since: Number(state.seen[info.sessionId]) || 0 }) : []
           const lines = [
-            `fish-mood rev ${PLUGIN_REV}(三层:情绪/心情/性格)`,
+            `everwith rev ${PLUGIN_REV}(三层:情绪/心情/性格)`,
             `状态文件:${join(stateDir, 'state.json')} · 审计:${join(stateDir, 'audit.jsonl')}`,
             `当前会话:${info.conv || '(拿不到)'}${info.label ? `(${info.label})` : ''} · 渠道 ${channel}${channelEnabled(channel, settings.channels) ? '(会注入)' : '(不注入:channels 关了)'}`,
             `事件 ${events.length} 条 · 真实用户消息 ${realUsers.length} 条${lastReal ? ` · 最后一条 seq ${lastReal.seq}(${new Date(lastReal.time).toLocaleTimeString('zh-CN', { hour12: false })})` : ''}`,
@@ -1637,7 +1637,7 @@ export function apply(ctx, config = {}) {
     ctx.effect(() => () => {
       clearTimeout(first)
       clearInterval(timer)
-    }, 'fish-mood: heartbeat')
+    }, 'everwith: heartbeat')
   }
 
   // ── 自己去看 ────────────────────────────────────────────────────────────
@@ -1736,7 +1736,7 @@ export function apply(ctx, config = {}) {
       stopped = true
       rescheduleScreen = null
       if (timer) clearTimeout(timer)
-    }, 'fish-mood: screen loop')
+    }, 'everwith: screen loop')
   }
 
   // ── 语音 ────────────────────────────────────────────────────────────────
@@ -1744,7 +1744,7 @@ export function apply(ctx, config = {}) {
   // 以及与客户端的播放通道。它自己管自己的 ctx.effect，挂不上也不该拖垮情绪系统。
   try {
     // 语音识别：客户端录音 → 本地 sherpa-onnx → 文字。挂不上不影响朗读。
-    ctx.effect(() => applyAsrRoutes(ctx, log), 'spoon-companion: asr routes')
+    ctx.effect(() => applyAsrRoutes(ctx, log), 'everwith: asr routes')
 
     // 语音播报格式那段只在"通话中"注入:平时不朗读,写一堆标签规则只会干扰正常聊天。
     voicePlugin.setCallProbe?.(() => isCallActive())

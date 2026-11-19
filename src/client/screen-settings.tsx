@@ -1,17 +1,17 @@
 /**
- * 设置 → Spoon 陪伴
+ * 设置 → 常伴
  *
  * 一页装完这个插件的所有开关：总开关、身份、看屏幕、主动说、情绪、说话、心跳、语音。
- * 配置走宿主侧的 /api/spoon-companion/settings 和 /screen，改完立刻生效，不用重启。
+ * 配置走宿主侧的 /api/everwith/settings 和 /screen，改完立刻生效，不用重启。
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { SettingsRow as VoiceSettingsRow } from './voice/ui.tsx'
 import { MIC_DEFAULTS, readMic, writeMic, type MicSettings } from './mic-settings.ts'
 
-const API_SETTINGS = '/api/spoon-companion/settings'
-const API_SCREEN = '/api/spoon-companion/screen'
-const API_NOW = '/api/spoon-companion/now'
+const API_SETTINGS = '/api/everwith/settings'
+const API_SCREEN = '/api/everwith/screen'
+const API_NOW = '/api/everwith/now'
 
 type NowSnap = {
   ok: boolean
@@ -168,7 +168,7 @@ export function ScreenSettingsSection() {
   return (
     <div style={box}>
       <div style={group}>
-        <div style={rowTitle}>Spoon 陪伴</div>
+        <div style={rowTitle}>常伴</div>
         <div style={hint}>整块暂停后：不注入心情段、三个工具都不工作、也不看屏幕。</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" checked={cfg?.general?.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ general: { enabled: e.target.checked } })} />

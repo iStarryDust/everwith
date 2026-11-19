@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Fish Mood",
-    "description": "Gives the agent a mood that actually changes: 36 emotions with half-lives that fade on their own, a baseline that follows the clock, per-group and per-person warmth, and small life events between chats. Ships the mood_now / mood_feel / mood_diary tools."
+    "title": "Everwith",
+    "description": "Gives the chat persona a body, a voice, and a clock of its own: moods evolve over time and through conversation, replies arrive one message at a time, speech is synthesized and recognized, and the screen is glanced at now and then. All five pieces can be turned off independently."
   }
 }
