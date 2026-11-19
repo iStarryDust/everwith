@@ -23,7 +23,7 @@ import * as voicePlugin from './lib/voice.js'
 import { capture, screenSupported } from './lib/screen.js'
 import { applyAsrRoutes } from './lib/asr-route.js'
 import { isCallActive, markCallSession, setCallGlobal } from './lib/asr.js'
-import { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { EMOTION_KEYS, EMOTION_MENU, TRAITS, resolveEmotion, tierOf } from './lib/catalog.js'
@@ -188,6 +188,35 @@ export function apply(ctx, config = {}) {
   if (Number.isFinite(Number(settings.intimacy?.level))) {
     state.intimacy = { ...(state.intimacy ?? {}), level: Math.max(0, Math.min(2, Math.round(Number(settings.intimacy.level)))) }
   }
+
+  // 看屏幕的设置:设置页改过的值单独存一份,启动时盖在配置上。
+  // 这样不用去动 profile 的 cordis.patch.yml,也不用重启。
+  const screenFile = join(stateDir, 'screen.json')
+  const readScreenOverrides = () => {
+    try {
+      const raw = JSON.parse(readFileSync(screenFile, 'utf8'))
+      return raw && typeof raw === 'object' ? raw : {}
+    } catch {
+      return {}
+    }
+  }
+  const writeScreenOverrides = (patch) => {
+    const next = { ...readScreenOverrides(), ...patch }
+    try {
+      writeFileSync(screenFile, JSON.stringify(next, null, 2), 'utf8')
+    } catch (error) {
+      log('warn', `看屏幕设置写盘失败:${error instanceof Error ? error.message : String(error)}`)
+    }
+    return next
+  }
+  {
+    const saved = readScreenOverrides()
+    for (const key of ['enabled', 'baseMinutes', 'minMinutes', 'maxMinutes', 'nightFactor', 'dailyLimit', 'speak']) {
+      if (saved[key] !== undefined) settings.screen[key] = saved[key]
+    }
+  }
+  /** 设置页改完节奏后,让定时器立刻按新值重排 */
+  let rescheduleScreen = null
   const commit = () => {
     pruneState(state)
     return saveState(stateDir, state)
@@ -471,21 +500,20 @@ export function apply(ctx, config = {}) {
         res.end(JSON.stringify(payload))
       } catch { /* ignore */ }
     }
-    // 刷新页面后按钮要知道当前状态
-    const statusRoute = {
-      method: 'GET',
-      path: '/api/spoon-companion/call',
-      handler: async (_req, res) => {
-        const query = String(_req?.url ?? '')
-        const m = /[?&]sessionId=([^&]+)/.exec(query)
-        const id = m ? decodeURIComponent(m[1]) : ''
-        const on = callGlobal || (id ? callSessions.has(id) : false)
-        reply(res, 200, { ok: true, on, lastBody: lastCallBody, global: callGlobal })      },
-    }
+    // 路由按 (kind, path) 去重,不看 method —— GET 查状态、POST 开关,得在同一个 handler 里分支。
+    // (之前拆成两个 register,第二个会被判重复而注册失败,POST 一直没生效。)
     const route = {
-      method: 'POST',
+      kind: 'exact',
       path: '/api/spoon-companion/call',
       handler: async (req, res) => {
+        if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
+          const query = String(req?.url ?? '')
+          const m = /[?&]sessionId=([^&]+)/.exec(query)
+          const id = m ? decodeURIComponent(m[1]) : ''
+          const on = callGlobal || (id ? callSessions.has(id) : false)
+          reply(res, 200, { ok: true, on, lastBody: lastCallBody, global: callGlobal })
+          return
+        }
         try {
           let raw = ''
           for await (const chunk of req) raw += chunk
@@ -511,15 +539,97 @@ export function apply(ctx, config = {}) {
       },
     }
     try {
-      const disposers = []
-      disposers.push(webServer.register(statusRoute))
-      disposers.push(webServer.register(route))
-      return () => { for (const d of disposers) { try { d?.() } catch { /* ignore */ } } }
+      const dispose = webServer.register(route)
+      return () => { try { dispose?.() } catch { /* ignore */ } }
     } catch (error) {
       log('warn', `通话按钮通道注册失败:${error instanceof Error ? error.message : String(error)}`)
       return undefined
     }
   }, 'spoon-companion: call route')
+
+  /** 看屏幕:设置页读这个拿配置和状态,写完立刻生效,不用重启 */
+  ctx.effect(() => {
+    const webServer = ctx.webServer ?? ctx.get('webServer')
+    if (!webServer?.register) return undefined
+    const reply = (res, code, payload) => {
+      try {
+        res.statusCode = code
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify(payload))
+      } catch { /* ignore */ }
+    }
+    const snapshotOf = () => {
+      const now = Date.now()
+      const sc = state.screen ?? {}
+      const plan = lookInterval(state, settings.screen, now)
+      const lastAt = Number(sc.lastAt) || 0
+      const nextAt = Number(sc.nextAt) || 0
+      return {
+        ok: true,
+        config: {
+          enabled: settings.screen.enabled === true,
+          baseMinutes: Number(settings.screen.baseMinutes) || 8,
+          minMinutes: Number(settings.screen.minMinutes) || 3,
+          maxMinutes: Number(settings.screen.maxMinutes) || 45,
+          nightFactor: Number(settings.screen.nightFactor) || 8,
+          dailyLimit: Number(settings.screen.dailyLimit) || 120,
+          speak: String(settings.screen.speak ?? 'never'),
+        },
+        state: {
+          lastAt,
+          title: String(sc.title ?? ''),
+          today: Number(sc.today) || 0,
+          inMinutes: nextAt > now ? Math.round((nextAt - now) / 60_000) : 0,
+          everyMinutes: plan.minutes,
+          night: plan.night,
+          fails: Number(sc.fails) || 0,
+        },
+        now,
+      }
+    }
+    // DSH 的路由按 (kind, path) 去重,不区分 method —— 所以 GET / POST 必须在同一个 handler 里分支
+    const route = {
+      kind: 'exact',
+      path: '/api/spoon-companion/screen',
+      handler: async (req, res) => {
+        if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
+          reply(res, 200, snapshotOf())
+          return
+        }
+        try {
+          let raw = ''
+          for await (const chunk of req) raw += chunk
+          const body = raw ? JSON.parse(raw) : {}
+          const patch = {}
+          if (typeof body.enabled === 'boolean') patch.enabled = body.enabled
+          const ranges = [
+            ['baseMinutes', 2, 30],
+            ['minMinutes', 1, 15],
+            ['maxMinutes', 10, 180],
+            ['nightFactor', 2, 20],
+            ['dailyLimit', 10, 500],
+          ]
+          for (const [key, lo, hi] of ranges) {
+            if (body[key] === undefined) continue
+            patch[key] = Math.max(lo, Math.min(hi, Math.round(Number(body[key]) || 0)))
+          }
+          if (body.speak !== undefined) patch.speak = String(body.speak) === 'urge' ? 'urge' : 'never'
+          writeScreenOverrides(patch)
+          Object.assign(settings.screen, patch)
+          state.screen = { ...(state.screen ?? {}), nextAt: 0 }
+          rescheduleScreen?.()
+          commit()
+          reply(res, 200, snapshotOf())
+        } catch (error) {
+          reply(res, 400, { ok: false, error: String(error?.message ?? error) })
+        }
+      },
+    }
+    const dispose = webServer.register(route)
+    return () => {
+      try { dispose?.() } catch { /* ignore */ }
+    }
+  }, 'spoon-companion: screen route')
 
   /**
    * 这个会话现在在不在通话里。
@@ -1132,9 +1242,16 @@ export function apply(ctx, config = {}) {
         loop()
       }, nextDelay())
     }
+    // 设置页改完节奏,立刻按新值重排,不用等这一轮走完
+    rescheduleScreen = () => {
+      if (stopped) return
+      if (timer) clearTimeout(timer)
+      loop()
+    }
     loop()
     ctx.effect(() => () => {
       stopped = true
+      rescheduleScreen = null
       if (timer) clearTimeout(timer)
     }, 'fish-mood: screen loop')
   }
