@@ -707,7 +707,7 @@ export function apply(ctx, config = {}) {
             if (body[key] === undefined) continue
             patch[key] = Math.max(lo, Math.min(hi, Math.round(Number(body[key]) || 0)))
           }
-          if (body.speak !== undefined) patch.speak = String(body.speak) === 'urge' ? 'urge' : 'never'
+          if (body.speak !== undefined) patch.speak = ['never', 'urge', 'always'].includes(String(body.speak)) ? String(body.speak) : 'never'
           writeScreenOverrides(patch)
           Object.assign(settings.screen, patch)
           state.screen = { ...(state.screen ?? {}), nextAt: 0 }

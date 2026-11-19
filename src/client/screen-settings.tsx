@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { SettingsRow as VoiceSettingsRow } from './voice/ui.tsx'
+import { MIC_DEFAULTS, readMic, writeMic, type MicSettings } from './mic-settings.ts'
 
 const API_SETTINGS = '/api/spoon-companion/settings'
 const API_SCREEN = '/api/spoon-companion/screen'
@@ -80,6 +81,11 @@ export function ScreenSettingsSection() {
   const [error, setError] = useState('')
   const [identityDraft, setIdentityDraft] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
+  const [mic, setMic] = useState<MicSettings>(() => readMic())
+
+  const saveMic = (patch: Partial<MicSettings>) => {
+    setMic(writeMic(patch))
+  }
 
   const load = useCallback(async () => {
     try {
@@ -181,13 +187,18 @@ export function ScreenSettingsSection() {
 
       <div style={group}>
         <div style={rowTitle}>主动说</div>
-        <div style={hint}>命中「值得说」的钩子时：只看不说 / 攒着等你下次开口 / 直接开一个新窗口说一句。</div>
+        <div style={hint}>
+          看到值得说的画面（报错、直播、游戏、聊天）时怎么办：
+          <b>只看不说</b> —— 什么都不做；
+          <b>攒着</b> —— 留一条冲动，等你下次开口时带出来；
+          <b>开新窗口说</b> —— 直接新建一个对话，她开口说一句（文字，不是语音）。
+        </div>
         {cfg ? (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {[
               ['never', '只看不说'],
               ['urge', '攒着'],
-              ['always', '直接说'],
+              ['always', '开新窗口说'],
             ].map(([value, label]) => (
               <button key={value} type="button" disabled={busy || off} onClick={() => void saveScreen({ speak: value })} style={pill(cfg.screen.speak === value)}>
                 {label}
@@ -281,6 +292,34 @@ export function ScreenSettingsSection() {
         <div style={rowTitle}>语音</div>
         <div style={hint}>引擎、Key、音色、自动朗读都在这里。</div>
         <VoiceSettingsRow defaultOpen />
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>麦克风</div>
+        <div style={hint}>
+          这几个是"怎么拾音"，改完要重新点一下麦克风按钮才生效。开着耳机再打开监听，能听见自己的声音，方便调阈值。
+        </div>
+        {slider('说话阈值', Math.round(mic.level * 1000), 2, 60, '×0.001', (n) => saveMic({ level: n / 1000 }))}
+        {slider('输入音量', Math.round(mic.gain * 10), 5, 40, '×0.1', (n) => saveMic({ gain: n / 10 }))}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={mic.denoise} onChange={(e) => saveMic({ denoise: e.target.checked })} />
+          <span>降噪</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={mic.echoCancel} onChange={(e) => saveMic({ echoCancel: e.target.checked })} />
+          <span>回声消除（外放时防自己听见自己）</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={mic.autoGain} onChange={(e) => saveMic({ autoGain: e.target.checked })} />
+          <span>自动增益</span>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={mic.monitor} onChange={(e) => saveMic({ monitor: e.target.checked })} />
+          <span>监听自己（回环，戴耳机再用）</span>
+        </label>
+        <div style={hint}>
+          阈值越高越不容易被环境声触发，太低会把呼吸也当成说话；音量只放大送给识别的信号，不改变录进来的原始声音。
+        </div>
       </div>
 
       <div style={group}>

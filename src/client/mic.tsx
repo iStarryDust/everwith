@@ -11,6 +11,7 @@
  * 丢的正好是关键的那一片，一句话就识别不全。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { readMic } from './mic-settings.ts'
 
 const FEED = '/api/spoon-companion/asr/feed'
 const CLOSE = '/api/spoon-companion/asr/close'
@@ -25,8 +26,7 @@ const TARGET_RATE = 16000
 const SILENCE_MS = 1800
 /** 单句最长（ms） */
 const MAX_UTTERANCE_MS = 20000
-/** 音量阈值，低于这个当作没在说话 */
-const VOICE_LEVEL = 0.008
+/** 音量阈值不再写死：从设置页的麦克风参数里读（mic-settings.ts） */
 /** 待发队列上限，超了就丢最老的（宁可丢也不堆） */
 const MAX_QUEUE = 8
 /** 一片多少个采样。48k 下 8192 ≈ 170ms */
@@ -330,8 +330,15 @@ export function VoiceButton(
         return
       }
 
-      // 最朴素的请求，不加额外约束
-      const media = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // 约束跟设置页里的麦克风参数走（降噪 / 回声消除 / 自动增益）
+      const micCfg = readMic()
+      const media = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: micCfg.echoCancel,
+          noiseSuppression: micCfg.denoise,
+          autoGainControl: micCfg.autoGain,
+        },
+      })
       streamRef.current = media
       const track = media.getAudioTracks()[0]
       console.log(`${TAG} 麦克风: ${track?.label ?? '未知'}`)
@@ -349,9 +356,15 @@ export function VoiceButton(
       const node = audioCtx.createScriptProcessor(BUFFER_SIZE, 1, 1)
       nodeRef.current = node
 
+      // 输入增益：设在 source 和识别之间，推给识别的是放大后的信号
+      const gainNode = audioCtx.createGain()
+      gainNode.gain.value = micCfg.gain
+      source.connect(gainNode)
+      gainNode.connect(node)
+
+      // 监听自己：gain 给 1 就能从耳机里听见自己的声音，用来调阈值
       const mute = audioCtx.createGain()
-      mute.gain.value = 0
-      source.connect(node)
+      mute.gain.value = micCfg.monitor ? 1 : 0
       node.connect(mute)
       mute.connect(audioCtx.destination)
 
@@ -366,7 +379,7 @@ export function VoiceButton(
         if (!aliveRef.current) return
         const pcm = new Float32Array(ev.inputBuffer.getChannelData(0))
 
-        if (rms(pcm) > VOICE_LEVEL) {
+        if (rms(pcm) > micCfg.level) {
           lastVoiceRef.current = Date.now()
           spokeRef.current = true
         }
