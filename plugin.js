@@ -655,6 +655,28 @@ export function apply(ctx, config = {}) {
     return { ok: false, error: errors.join(' | ') }
   }
 
+  // ── 极简模式:把工具表收成白名单 ────────────────────────────────────────
+  // 官方文档原话:`ctx.tools.restrict()` can only remove tools,而且要在
+  // **那个 agent 自己的上下文**上调,这样 schema、查找、执行三处才对得齐。
+  // 所以这里不改别人的注册,只在该 agent 的 ctx 上挂一层过滤。
+  {
+    const MINIMAL_ALLOW = ['mood_now', 'mood_feel', 'mood_diary', 'look_screen', 'read_image']
+    const applied = new WeakSet()
+    ctx.effect(() => ctx.on('agent/status', ({ agent }) => {
+      if (settings.minimal !== true) return
+      const agentCtx = agent?.ctx
+      if (!agentCtx?.tools?.restrict) return
+      if (applied.has(agent)) return
+      applied.add(agent)
+      try {
+        agentCtx.tools.restrict({ allow: MINIMAL_ALLOW })
+        log('info', `极简模式:工具表收成 ${MINIMAL_ALLOW.join(' / ')}`)
+      } catch (error) {
+        log('warn', `极简模式:限制工具失败 ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }), 'fish-mood: minimal restrict')
+  }
+
   /** 看屏幕:设置页读这个拿配置和状态,写完立刻生效,不用重启 */
   ctx.effect(() => {
     const webServer = ctx.webServer ?? ctx.get('webServer')
@@ -1056,8 +1078,12 @@ export function apply(ctx, config = {}) {
         if (settings.minimal !== true) return ''
         return [
           '【极简模式】',
-          '这一轮只聊天。不要调用任何工具 —— 不查文件、不跑命令、不用浏览器、不搜网、不记笔记。',
-          '需要知道什么就直接问,需要记什么就记在自己的话里。',
+          '这一轮只聊天。工具表里只剩下面这几个，其他一律没有，也不要去想它们：',
+          '· mood_now —— 想看自己现在什么心情',
+          '· mood_feel —— 想记一笔心情',
+          '· mood_diary —— 想翻或写日记',
+          '· look_screen / read_image —— 想看她眼前的屏幕',
+          '要文件、要命令、要搜网，一律没有。需要什么就直接问。',
         ].join('\n')
       },
     }), 'fish-mood: minimal section')
@@ -1235,11 +1261,9 @@ export function apply(ctx, config = {}) {
   })
 
   // ── 工具 ────────────────────────────────────────────────────────────────
+  // 自己的工具永远注册 —— 极简模式要留的正是它们,靠 tools.restrict 去收别人的。
   const tools = ctx.get('tools')
-  if (settings.minimal === true) {
-    // 极简模式:自己的工具一个都不注册 —— 会话里就只剩聊天
-    log('info', '极简模式:四个工具都不注册,也不看屏幕')
-  } else if (!tools?.register) {
+  if (!tools?.register) {
     log('warn', 'tools 服务不可用,mood_* 工具未注册')
   } else {
     tools.register({
