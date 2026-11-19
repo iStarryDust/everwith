@@ -21,7 +21,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import * as voicePlugin from './lib/voice.js'
 import { applyAsrRoutes } from './lib/asr-route.js'
-import { isVoiceActive } from './lib/asr.js'
+import { isVoiceActive, isCallActive, markCallSession, setCallGlobal } from './lib/asr.js'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -126,9 +126,15 @@ const MULTI_TURN_FORMAT = [
   '  错: 这一句 / 换行 / <!--more--> / 又接下一句 —— 标记下面不该有字',
 ]
 
-/** 分条提示词:标题按场景换,规则不变 */
+/** 分条提示词:标题按场景换;在身边的写法要求(括号里写动作)只在非通话时出现 */
 const multiTurnText = (inCall) =>
-  [inCall ? '【正在通电话】' : '【在身边说话】', ...MULTI_TURN_RULES, '', ...MULTI_TURN_FORMAT].join('\n')
+  [
+    inCall ? '【正在通电话】' : '【在身边说话】',
+    ...MULTI_TURN_RULES,
+    '',
+    ...(inCall ? [] : ['动作、体态、感官等放在括号里。', '']),
+    ...MULTI_TURN_FORMAT,
+  ].join('\n')
 
 export function mergeConfig(config = {}) {
   const merged = { ...DEFAULTS, ...config }
@@ -472,11 +478,13 @@ export function apply(ctx, config = {}) {
           if (!id) {
             const on = body.on !== false
             callGlobal = on
+            setCallGlobal(on)
             reply(res, 200, { ok: true, on, scope: 'global' })
             return
           }
           if (body.on === false) callSessions.delete(id)
           else callSessions.add(id)
+          markCallSession(id, body.on !== false)
           reply(res, 200, { ok: true, on: callSessions.has(id) })
         } catch (error) {
           reply(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -995,6 +1003,8 @@ export function apply(ctx, config = {}) {
     // 语音识别：客户端录音 → 本地 sherpa-onnx → 文字。挂不上不影响朗读。
     ctx.effect(() => applyAsrRoutes(ctx, log), 'spoon-companion: asr routes')
 
+    // 语音播报格式那段只在"通话中"注入:平时不朗读,写一堆标签规则只会干扰正常聊天。
+    voicePlugin.setCallProbe?.(() => isCallActive())
     voicePlugin.apply(ctx)
   } catch (error) {
     log('warn', `语音半边挂载失败（情绪系统继续工作）:${error instanceof Error ? error.message : String(error)}`)
