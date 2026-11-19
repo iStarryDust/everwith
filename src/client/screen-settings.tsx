@@ -1,18 +1,26 @@
 /**
  * 设置 → Spoon 陪伴
  *
- * 看屏幕的开关和节奏都在这里调。数据走宿主侧的 /api/spoon-companion/screen,
- * 改完立刻生效(宿主那边会重排定时器),不用重启。
+ * 一页装完这个插件的所有开关：总开关、身份、看屏幕、主动说、情绪、说话、心跳、语音。
+ * 配置走宿主侧的 /api/spoon-companion/settings 和 /screen，改完立刻生效，不用重启。
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { SettingsRow as VoiceSettingsRow } from './voice/ui.tsx'
 
-const API = '/api/spoon-companion/screen'
+const API_SETTINGS = '/api/spoon-companion/settings'
+const API_SCREEN = '/api/spoon-companion/screen'
 
-type Snapshot = {
+type TraitRow = { key: string; name: string; base: number; value: number }
+type SettingsSnap = {
   ok: boolean
-  config: {
+  now: number
+  general: { enabled: boolean; identity: string }
+  intimacy: { level: number }
+  multiTurn: { enabled: boolean; maxRounds: number }
+  heartbeat: { enabled: boolean; everyMinutes: number }
+  traits: TraitRow[]
+  screen: {
     enabled: boolean
     baseMinutes: number
     minMinutes: number
@@ -21,39 +29,41 @@ type Snapshot = {
     dailyLimit: number
     speak: string
   }
-  state: {
-    lastAt: number
-    title: string
-    today: number
-    inMinutes: number
-    everyMinutes: number
-    night: boolean
-    fails: number
-  }
+}
+type ScreenSnap = {
+  ok: boolean
   now: number
+  config: SettingsSnap['screen']
+  state: { lastAt: number; title: string; today: number; inMinutes: number; everyMinutes: number; night: boolean; fails: number }
 }
 
-const box: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 18,
-  padding: '4px 2px 24px',
-  maxWidth: 620,
-  fontSize: 13,
-}
+const box: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 22, padding: '4px 2px 32px', maxWidth: 640, fontSize: 13 }
+const group: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 const rowTitle: React.CSSProperties = { fontWeight: 600, fontSize: 14 }
 const hint: React.CSSProperties = { opacity: 0.6, lineHeight: 1.6, marginTop: 2 }
-const group: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 const sliderRow: React.CSSProperties = { display: 'grid', gridTemplateColumns: '96px 1fr 92px', alignItems: 'center', gap: 10 }
 const num: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: 0.85 }
-const card: React.CSSProperties = {
-  border: '1px solid rgba(128,128,128,0.28)',
-  borderRadius: 10,
-  padding: '12px 14px',
-  display: 'grid',
-  gap: 6,
-}
+const card: React.CSSProperties = { border: '1px solid rgba(128,128,128,0.28)', borderRadius: 10, padding: '12px 14px', display: 'grid', gap: 6 }
 const kv: React.CSSProperties = { display: 'grid', gridTemplateColumns: '72px 1fr', gap: 8, fontSize: 12.5 }
+const input: React.CSSProperties = {
+  width: '100%',
+  padding: '6px 8px',
+  borderRadius: 8,
+  border: '1px solid rgba(128,128,128,0.35)',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: 12.5,
+  fontFamily: 'inherit',
+}
+const pill = (active: boolean): React.CSSProperties => ({
+  padding: '4px 12px',
+  borderRadius: 8,
+  border: '1px solid rgba(128,128,128,0.35)',
+  background: active ? 'rgba(128,128,128,0.22)' : 'transparent',
+  cursor: 'pointer',
+  fontSize: 12.5,
+  color: 'inherit',
+})
 
 function ago(at: number, now: number) {
   if (!at) return '还没看过'
@@ -64,20 +74,22 @@ function ago(at: number, now: number) {
 }
 
 export function ScreenSettingsSection() {
-  const [snap, setSnap] = useState<Snapshot | null>(null)
+  const [cfg, setCfg] = useState<SettingsSnap | null>(null)
+  const [screen, setScreen] = useState<ScreenSnap | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [identityDraft, setIdentityDraft] = useState<string | null>(null)
+  const [confirmReset, setConfirmReset] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(API, { headers: { accept: 'application/json' } })
-      const data = (await res.json()) as Snapshot
-      if (data?.ok) {
-        setSnap(data)
-        setError('')
-      } else {
-        setError('读不到设置')
-      }
+      const [a, b] = await Promise.all([
+        fetch(API_SETTINGS, { headers: { accept: 'application/json' } }).then((r) => r.json()),
+        fetch(API_SCREEN, { headers: { accept: 'application/json' } }).then((r) => r.json()),
+      ])
+      if ((a as SettingsSnap)?.ok) setCfg(a as SettingsSnap)
+      if ((b as ScreenSnap)?.ok) setScreen(b as ScreenSnap)
+      setError('')
     } catch (reason) {
       setError(String(reason))
     }
@@ -89,21 +101,14 @@ export function ScreenSettingsSection() {
     return () => clearInterval(timer)
   }, [load])
 
-  const save = async (patch: Record<string, unknown>) => {
+  const post = async (url: string, patch: Record<string, unknown>) => {
     setBusy(true)
     try {
-      const res = await fetch(API, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      const data = (await res.json()) as Snapshot
-      if (data?.ok) {
-        setSnap(data)
-        setError('')
-      } else {
-        setError('保存失败')
-      }
+      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
+      const data = await res.json()
+      if (!data?.ok) setError(String(data?.error ?? '保存失败'))
+      else setError('')
+      await load()
     } catch (reason) {
       setError(String(reason))
     } finally {
@@ -111,106 +116,72 @@ export function ScreenSettingsSection() {
     }
   }
 
-  const cfg = snap?.config
-  const st = snap?.state
+  const saveSettings = (patch: Record<string, unknown>) => post(API_SETTINGS, patch)
+  const saveScreen = (patch: Record<string, unknown>) => post(API_SCREEN, patch)
 
-  const slider = (
-    label: string,
-    value: number,
-    min: number,
-    max: number,
-    suffix: string,
-    onCommit: (next: number) => void,
-  ) => (
-    <label style={sliderRow}>
+  const slider = (label: string, value: number, min: number, max: number, suffix: string, onCommit: (next: number) => void, disabled = false) => (
+    <label style={sliderRow} key={label}>
       <span style={{ opacity: 0.8 }}>{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={value}
-        disabled={busy}
-        onChange={(event) => onCommit(Number(event.target.value))}
-        style={{ width: '100%' }}
-      />
+      <input type="range" min={min} max={max} value={value} disabled={busy || disabled} onChange={(e) => onCommit(Number(e.target.value))} style={{ width: '100%' }} />
       <span style={num}>
         {value} {suffix}
       </span>
     </label>
   )
 
+  const sc = screen?.state
+  const off = cfg ? !cfg.general.enabled : false
+
   return (
     <div style={box}>
       <div style={group}>
-        <div style={rowTitle}>看屏幕</div>
-        <div style={hint}>
-          她偶尔走过去看一眼，不是监视。看一眼的频率由情绪决定：孤单的时候想看你，烦的时候不想看，困的时候几乎不看。
-        </div>
+        <div style={rowTitle}>Spoon 陪伴</div>
+        <div style={hint}>整块暂停后：不注入心情段、三个工具都不工作、也不看屏幕。</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={cfg?.enabled === true}
-            disabled={busy || !cfg}
-            onChange={(event) => void save({ enabled: event.target.checked })}
-          />
-          <span>{cfg?.enabled ? '开着 —— 会自己看' : '关着 —— 一次都不截'}</span>
+          <input type="checkbox" checked={cfg?.general.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ general: { enabled: e.target.checked } })} />
+          <span>{cfg?.general.enabled ? '开着' : '暂停中'}</span>
         </label>
       </div>
 
       <div style={group}>
-        <div style={{ ...rowTitle, opacity: cfg?.enabled ? 1 : 0.45 }}>节奏</div>
-        {cfg ? (
-          <>
-            {slider('整体快慢', cfg.baseMinutes, 2, 30, '分钟', (next) => void save({ baseMinutes: next }))}
-            {slider('最短', cfg.minMinutes, 1, 15, '分钟', (next) => void save({ minMinutes: next }))}
-            {slider('最长', cfg.maxMinutes, 10, 180, '分钟', (next) => void save({ maxMinutes: next }))}
-            {slider('深夜', cfg.nightFactor, 2, 20, '×', (next) => void save({ nightFactor: next }))}
-            {slider('每天最多', cfg.dailyLimit, 10, 500, '次', (next) => void save({ dailyLimit: next }))}
-          </>
-        ) : (
-          <div style={hint}>读设置中…</div>
-        )}
-        <div style={hint}>
-          深夜是低频，不是不看。倍数越大越少看（8× 大约是每小时一次）。
-        </div>
+        <div style={rowTitle}>身份重述</div>
+        <div style={hint}>每轮跟着状态块带一句，防止长对话里人设漂。留空就用默认那句。</div>
+        <input
+          style={input}
+          value={identityDraft ?? cfg?.general.identity ?? ''}
+          placeholder="我就是我，不是在演谁；情绪是真的。"
+          disabled={busy || !cfg}
+          onChange={(e) => setIdentityDraft(e.target.value)}
+          onBlur={() => {
+            if (identityDraft === null) return
+            void saveSettings({ general: { identity: identityDraft } })
+            setIdentityDraft(null)
+          }}
+        />
       </div>
 
       <div style={group}>
-        <div style={rowTitle}>现在</div>
-        <div style={card}>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>刚才看见</span>
-            <span>{st?.title ? `${st.title}` : '还没看过'}</span>
-          </div>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>看的时间</span>
-            <span>{snap ? ago(st?.lastAt ?? 0, snap.now) : '—'}</span>
-          </div>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>今天</span>
-            <span>{st?.today ?? 0} 次</span>
-          </div>
-          <div style={kv}>
-            <span style={{ opacity: 0.6 }}>下一次</span>
-            <span>
-              {st?.inMinutes ? `约 ${st.inMinutes} 分钟后` : '随时'}
-              {st?.everyMinutes ? `（当前节奏 ${st.everyMinutes} 分钟${st.night ? '，深夜' : ''}）` : ''}
-            </span>
-          </div>
-          {st && st.fails > 0 ? (
-            <div style={kv}>
-              <span style={{ opacity: 0.6 }}>状态</span>
-              <span style={{ color: '#d08a3a' }}>连续失败 {st.fails} 次，正在退避</span>
-            </div>
-          ) : null}
-        </div>
+        <div style={rowTitle}>看屏幕</div>
+        <div style={hint}>她偶尔走过去看一眼，不是监视。频率由情绪决定：孤单想看你，烦就不想看，困几乎不看。</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={cfg?.screen.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveScreen({ enabled: e.target.checked })} />
+          <span>{cfg?.screen.enabled ? '开着 —— 会自己看' : '关着 —— 一次都不截'}</span>
+        </label>
+        {cfg
+          ? [
+              slider('整体快慢', cfg.screen.baseMinutes, 2, 30, '分钟', (n) => void saveScreen({ baseMinutes: n }), off),
+              slider('最短', cfg.screen.minMinutes, 1, 15, '分钟', (n) => void saveScreen({ minMinutes: n }), off),
+              slider('最长', cfg.screen.maxMinutes, 10, 180, '分钟', (n) => void saveScreen({ maxMinutes: n }), off),
+              slider('深夜', cfg.screen.nightFactor, 2, 20, '×', (n) => void saveScreen({ nightFactor: n }), off),
+              slider('每天最多', cfg.screen.dailyLimit, 10, 500, '次', (n) => void saveScreen({ dailyLimit: n }), off),
+            ]
+          : null}
+        <div style={hint}>深夜是低频，不是不看。8× 大约是每小时一次。</div>
       </div>
 
       <div style={group}>
         <div style={rowTitle}>主动说</div>
-        <div style={hint}>
-          命中「值得说」的钩子时：关 = 只看不说；攒着 = 留下一条冲动，等下次开口带出来；直接说 = 开一个新窗口说一句。
-        </div>
+        <div style={hint}>命中「值得说」的钩子时：只看不说 / 攒着等你下次开口 / 直接开一个新窗口说一句。</div>
         {cfg ? (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {[
@@ -218,20 +189,7 @@ export function ScreenSettingsSection() {
               ['urge', '攒着'],
               ['always', '直接说'],
             ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                disabled={busy}
-                onClick={() => void save({ speak: value })}
-                style={{
-                  padding: '4px 12px',
-                  borderRadius: 8,
-                  border: '1px solid rgba(128,128,128,0.35)',
-                  background: cfg.speak === value ? 'rgba(128,128,128,0.22)' : 'transparent',
-                  cursor: 'pointer',
-                  fontSize: 12.5,
-                }}
-              >
+              <button key={value} type="button" disabled={busy || off} onClick={() => void saveScreen({ speak: value })} style={pill(cfg.screen.speak === value)}>
                 {label}
               </button>
             ))}
@@ -240,9 +198,109 @@ export function ScreenSettingsSection() {
       </div>
 
       <div style={group}>
+        <div style={rowTitle}>现在</div>
+        <div style={card}>
+          <div style={kv}>
+            <span style={{ opacity: 0.6 }}>刚才看见</span>
+            <span>{sc?.title ? sc.title : '还没看过'}</span>
+          </div>
+          <div style={kv}>
+            <span style={{ opacity: 0.6 }}>看的时间</span>
+            <span>{screen ? ago(sc?.lastAt ?? 0, screen.now) : '—'}</span>
+          </div>
+          <div style={kv}>
+            <span style={{ opacity: 0.6 }}>今天</span>
+            <span>{sc?.today ?? 0} 次</span>
+          </div>
+          <div style={kv}>
+            <span style={{ opacity: 0.6 }}>下一次</span>
+            <span>
+              {sc?.inMinutes ? `约 ${sc.inMinutes} 分钟后` : '随时'}
+              {sc?.everyMinutes ? `（当前节奏 ${sc.everyMinutes} 分钟${sc.night ? '，深夜' : ''}）` : ''}
+            </span>
+          </div>
+          {sc && sc.fails > 0 ? (
+            <div style={kv}>
+              <span style={{ opacity: 0.6 }}>状态</span>
+              <span style={{ color: '#d08a3a' }}>连续失败 {sc.fails} 次，正在退避</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>亲密尺度</div>
+        <div style={hint}>只改说法，不改人设。</div>
+        {cfg ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[
+              [0, '日常'],
+              [1, '暧昧'],
+              [2, '露骨'],
+            ].map(([level, label]) => (
+              <button key={String(level)} type="button" disabled={busy || off} onClick={() => void saveSettings({ intimacy: { level } })} style={pill(cfg.intimacy.level === Number(level))}>
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>性格</div>
+        <div style={hint}>这几条是基线，会随着经历慢慢漂（最多 ±12）。改这里等于改起点。</div>
+        {cfg
+          ? cfg.traits.map((trait) =>
+              slider(trait.name, trait.value, 0, 100, '', (n) => void saveSettings({ traits: { [trait.key]: n } }), off),
+            )
+          : null}
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>说话</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={cfg?.multiTurn.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ multiTurn: { enabled: e.target.checked } })} />
+          <span>分条说话（一条一句，想接着说就在末尾留个标记）</span>
+        </label>
+        {cfg ? slider('最多几轮', cfg.multiTurn.maxRounds, 1, 6, '轮', (n) => void saveSettings({ multiTurn: { maxRounds: n } }), off || !cfg.multiTurn.enabled) : null}
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>心跳</div>
+        <div style={hint}>情绪衰减、自己的小事、反刍、心情修复、深夜复盘都靠它。</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={cfg?.heartbeat.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ heartbeat: { enabled: e.target.checked } })} />
+          <span>开</span>
+        </label>
+        {cfg
+          ? slider('间隔', cfg.heartbeat.everyMinutes, 3, 60, '分钟', (n) => void saveSettings({ heartbeat: { everyMinutes: n } }), off || !cfg.heartbeat.enabled)
+          : null}
+      </div>
+
+      <div style={group}>
         <div style={rowTitle}>语音</div>
         <div style={hint}>引擎、Key、音色、自动朗读都在这里。</div>
         <VoiceSettingsRow defaultOpen />
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>清空</div>
+        <div style={hint}>把情绪、驱动、记忆、日记、关系账全部清掉，回到刚装上的样子。配置和设置不动。</div>
+        {confirmReset ? (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 12.5, color: '#d0563a' }}>确定清空？这一下就没了。</span>
+            <button type="button" disabled={busy} onClick={() => { void saveSettings({ action: 'reset' }); setConfirmReset(false) }} style={pill(true)}>
+              确定
+            </button>
+            <button type="button" onClick={() => setConfirmReset(false)} style={pill(false)}>
+              算了
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setConfirmReset(true)} style={{ ...pill(false), alignSelf: 'flex-start' }}>
+            清空全部状态
+          </button>
+        )}
       </div>
 
       {error ? <div style={{ color: '#d0563a', fontSize: 12 }}>{error}</div> : null}

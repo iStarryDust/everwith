@@ -29,7 +29,7 @@ import { join } from 'node:path'
 import { EMOTION_KEYS, EMOTION_MENU, TRAITS, resolveEmotion, tierOf } from './lib/catalog.js'
 import { appraise } from './lib/appraise.js'
 import {
-  applyImpulse, catharsis, circadian, decay, dueRumination, loadState, lookInterval, maybeLifeEvent, maybeMoodRepair,
+  applyImpulse, catharsis, circadian, decay, dueRumination, emptyState, loadState, lookInterval, maybeLifeEvent, maybeMoodRepair,
   nightlyReview, pruneState, remember, saveState, screenHook, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
@@ -219,6 +219,46 @@ export function apply(ctx, config = {}) {
       if (saved[key] !== undefined) settings.screen[key] = saved[key]
     }
   }
+  // 其它设置:总开关、身份、尺度、多轮、心跳、性格。
+  // 和看屏幕一样单独存一份,启动时盖在配置上;设置页改完立刻生效,不用重启。
+  const settingsFile = join(stateDir, 'settings.json')
+  const readSettingsOverrides = () => {
+    try {
+      const raw = JSON.parse(readFileSync(settingsFile, 'utf8'))
+      return raw && typeof raw === 'object' ? raw : {}
+    } catch {
+      return {}
+    }
+  }
+  const writeSettingsOverrides = (patch) => {
+    const next = { ...readSettingsOverrides(), ...patch }
+    try {
+      writeFileSync(settingsFile, JSON.stringify(next, null, 2), 'utf8')
+    } catch (error) {
+      log('warn', `设置写盘失败:${error instanceof Error ? error.message : String(error)}`)
+    }
+    return next
+  }
+  const applyTraitOverride = (traits) => {
+    for (const [key, value] of Object.entries(traits ?? {})) {
+      if (!TRAITS.some((trait) => trait.key === key)) continue
+      const num = Number(value)
+      if (!Number.isFinite(num)) continue
+      settings.traits[key] = Math.max(0, Math.min(100, num))
+      state.traits[key] = settings.traits[key]
+      state.traitBase = { ...(state.traitBase ?? {}), [key]: settings.traits[key] }
+    }
+  }
+  const applySettingsOverrides = () => {
+    const saved = readSettingsOverrides()
+    if (typeof saved.enabled === 'boolean') settings.enabled = saved.enabled
+    if (typeof saved.identity === 'string' && saved.identity.trim()) settings.identity = saved.identity.trim()
+    if (saved.intimacy && typeof saved.intimacy === 'object') Object.assign(settings.intimacy, saved.intimacy)
+    if (saved.multiTurn && typeof saved.multiTurn === 'object') Object.assign(settings.multiTurn, saved.multiTurn)
+    if (saved.heartbeat && typeof saved.heartbeat === 'object') Object.assign(settings.heartbeat, saved.heartbeat)
+    if (saved.traits && typeof saved.traits === 'object') applyTraitOverride(saved.traits)
+  }
+  applySettingsOverrides()
   /** 设置页改完节奏后,让定时器立刻按新值重排 */
   let rescheduleScreen = null
   const commit = () => {
@@ -685,6 +725,134 @@ export function apply(ctx, config = {}) {
     }
   }, 'spoon-companion: screen route')
 
+  /** 设置页:总开关、身份、尺度、多轮、心跳、性格 —— 读写都在这儿 */
+  ctx.effect(() => {
+    const webServer = ctx.webServer ?? ctx.get('webServer')
+    if (!webServer?.register) return undefined
+    const reply = (res, code, payload) => {
+      try {
+        res.statusCode = code
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify(payload))
+      } catch { /* ignore */ }
+    }
+    const snapshotOf = () => ({
+      ok: true,
+      now: Date.now(),
+      general: {
+        enabled: settings.enabled !== false,
+        identity: String(settings.identity ?? ''),
+      },
+      intimacy: { level: Math.max(0, Math.min(2, Number(settings.intimacy?.level ?? 1))) },
+      multiTurn: {
+        enabled: settings.multiTurn?.enabled !== false,
+        maxRounds: Math.max(1, Math.min(6, Number(settings.multiTurn?.maxRounds ?? 3))),
+      },
+      heartbeat: {
+        enabled: settings.heartbeat?.enabled !== false,
+        everyMinutes: Math.max(3, Math.min(60, Number(settings.heartbeat?.everyMinutes ?? 10))),
+      },
+      traits: TRAITS.map((trait) => ({
+        key: trait.key,
+        name: trait.name,
+        base: trait.base,
+        value: Math.round(Number(state.traits?.[trait.key] ?? trait.base)),
+      })),
+      screen: {
+        enabled: settings.screen?.enabled === true,
+        baseMinutes: Number(settings.screen?.baseMinutes) || 12,
+        minMinutes: Number(settings.screen?.minMinutes) || 6,
+        maxMinutes: Number(settings.screen?.maxMinutes) || 45,
+        nightFactor: Number(settings.screen?.nightFactor) || 8,
+        dailyLimit: Number(settings.screen?.dailyLimit) || 120,
+        speak: String(settings.screen?.speak ?? 'never'),
+      },
+    })
+    const route = {
+      kind: 'exact',
+      path: '/api/spoon-companion/settings',
+      handler: async (req, res) => {
+        if (String(req.method ?? 'GET').toUpperCase() !== 'POST') {
+          reply(res, 200, snapshotOf())
+          return
+        }
+        try {
+          let raw = ''
+          for await (const chunk of req) raw += chunk
+          const body = raw ? JSON.parse(raw) : {}
+          const patch = readSettingsOverrides()
+
+          // 清空:情绪和账本全部重来(只保留插件配置)
+          if (body.action === 'reset') {
+            state = emptyState()
+            commit()
+            audit({ kind: 'settings-reset' })
+            reply(res, 200, snapshotOf())
+            return
+          }
+
+          if (body.general && typeof body.general === 'object') {
+            if (typeof body.general.enabled === 'boolean') {
+              settings.enabled = body.general.enabled
+              patch.enabled = body.general.enabled
+            }
+            if (typeof body.general.identity === 'string') {
+              const text = body.general.identity.trim().slice(0, 200)
+              settings.identity = text
+              patch.identity = text
+            }
+          }
+          if (body.intimacy && typeof body.intimacy === 'object' && body.intimacy.level !== undefined) {
+            const level = Math.max(0, Math.min(2, Math.round(Number(body.intimacy.level) || 0)))
+            settings.intimacy = { ...(settings.intimacy ?? {}), level }
+            state.intimacy = { ...(state.intimacy ?? {}), level }
+            patch.intimacy = { ...(patch.intimacy ?? {}), level }
+          }
+          if (body.multiTurn && typeof body.multiTurn === 'object') {
+            const next = { ...(patch.multiTurn ?? {}) }
+            if (typeof body.multiTurn.enabled === 'boolean') {
+              settings.multiTurn = { ...(settings.multiTurn ?? {}), enabled: body.multiTurn.enabled }
+              next.enabled = body.multiTurn.enabled
+            }
+            if (body.multiTurn.maxRounds !== undefined) {
+              const rounds = Math.max(1, Math.min(6, Math.round(Number(body.multiTurn.maxRounds) || 3)))
+              settings.multiTurn = { ...(settings.multiTurn ?? {}), maxRounds: rounds }
+              next.maxRounds = rounds
+            }
+            patch.multiTurn = next
+          }
+          if (body.heartbeat && typeof body.heartbeat === 'object') {
+            const next = { ...(patch.heartbeat ?? {}) }
+            if (typeof body.heartbeat.enabled === 'boolean') {
+              settings.heartbeat = { ...(settings.heartbeat ?? {}), enabled: body.heartbeat.enabled }
+              next.enabled = body.heartbeat.enabled
+            }
+            if (body.heartbeat.everyMinutes !== undefined) {
+              const every = Math.max(3, Math.min(60, Math.round(Number(body.heartbeat.everyMinutes) || 10)))
+              settings.heartbeat = { ...(settings.heartbeat ?? {}), everyMinutes: every }
+              next.everyMinutes = every
+            }
+            patch.heartbeat = next
+          }
+          if (body.traits && typeof body.traits === 'object') {
+            applyTraitOverride(body.traits)
+            patch.traits = { ...(patch.traits ?? {}), ...body.traits }
+          }
+
+          writeSettingsOverrides(patch)
+          commit()
+          reply(res, 200, snapshotOf())
+        } catch (error) {
+          reply(res, 400, { ok: false, error: String(error?.message ?? error) })
+        }
+      },
+    }
+    const dispose = webServer.register(route)
+    return () => {
+      try { dispose?.() } catch { /* ignore */ }
+    }
+  }, 'spoon-companion: settings route')
+
   /**
    * 这个会话现在在不在通话里。
    * **只认客户端那把开关** —— 点了通话才算。不拿"有没有在送音频"当证据:
@@ -737,6 +905,7 @@ export function apply(ctx, config = {}) {
   /** 静态规则块:字节级不变(它在前缀里,一变缓存就废) */
   const rulesSectionText = (context) => {
     try {
+      if (settings.enabled === false) return ''
       if (settings.promptEnabled === false) return ''
       const channel = channelOf(context)
       if (!channel || !channelEnabled(channel, settings.channels)) return ''
@@ -749,6 +918,7 @@ export function apply(ctx, config = {}) {
   /** 实时状态块:固定模板,放在提示词最后 */
   const stateSectionText = (context) => {
     try {
+      if (settings.enabled === false) return ''
       if (settings.promptEnabled === false) return ''
       const session = sessionOf(context)
       if (!session) return ''
