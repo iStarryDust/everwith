@@ -1007,7 +1007,12 @@ export function apply(ctx, config = {}) {
             scene: view.scene?.word ? { word: view.scene.word, times: view.scene.events ?? 0 } : null,
             urge: urge ? (urge.kind === 'share' ? `想把刚才看到的那个说出去${urge.note ? `(${urge.note})` : ''}` : '想被安慰两句') : '',
             today: view.today ?? [],
-            memories: (view.memories ?? []).map((row) => `${row.text}${row.fresh ? '(今天)' : '(前几天)'}`),
+            memories: (view.memories ?? []).map((row) => {
+              const when = new Date(Number(row.at) || 0)
+              const clock = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`
+              const today = when.toDateString() === new Date(now).toDateString()
+              return `${row.text}(${today ? clock : `${when.getMonth() + 1}/${when.getDate()} ${clock}`})`
+            }),
             screen: {
               lastAt: Number(sc.lastAt) || 0,
               title: String(sc.title ?? ''),
