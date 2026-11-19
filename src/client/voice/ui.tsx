@@ -293,6 +293,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
   const [mimoKeyDraft, setMimoKeyDraft] = useState('')
   const [speechDraft, setSpeechDraft] = useState<string | null>(null)
   const [speechSaved, setSpeechSaved] = useState('')
+  const [speechDefault, setSpeechDefault] = useState('')
   const [styleDraft, setStyleDraft] = useState('')
   const fileInput = useRef<HTMLInputElement | null>(null)
 
@@ -320,7 +321,11 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
     let alive = true
     void fetch('/api/spoon-companion/settings', { headers: { accept: 'application/json' } })
       .then((r) => r.json())
-      .then((d) => { if (alive && typeof d?.mimoSpeech === 'string') setSpeechSaved(d.mimoSpeech) })
+      .then((d) => {
+        if (!alive) return
+        if (typeof d?.mimoSpeech === 'string') setSpeechSaved(d.mimoSpeech)
+        if (typeof d?.defaults?.mimoSpeech === 'string') setSpeechDefault(d.defaults.mimoSpeech)
+      })
       .catch(() => { /* 读不到就用默认 */ })
     return () => { alive = false }
   }, [])
@@ -332,7 +337,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mimoSpeech: text }),
       })
-      setSpeechSaved(text)
+      setSpeechSaved(text.trim() === speechDefault.trim() ? '' : text)
       setMsg('✓ 播报规范已保存')
       setMsgOk(true)
     } catch (e) {
@@ -514,7 +519,7 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                   <textarea
                     className="cv-textarea"
                     style={{ minHeight: 130 }}
-                    value={speechDraft ?? speechSaved}
+                    value={speechDraft ?? (speechSaved || speechDefault)}
                     spellCheck={false}
                     onChange={(e) => setSpeechDraft(e.target.value)}
                     onBlur={() => {

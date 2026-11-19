@@ -33,7 +33,7 @@ import {
   nightlyReview, pruneState, remember, saveState, screenHook, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
-import { RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
+import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
 
 export const name = 'fish-mood'
 /** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
@@ -829,6 +829,13 @@ export function apply(ctx, config = {}) {
         rules: String(settings.multiTurn?.rules ?? ''),
       },
       mimoSpeech: String(settings.mimoSpeech ?? ''),
+      defaults: {
+        mimoSpeech: (() => { try { return String(voicePlugin.defaultSpeechText?.() ?? '') } catch { return '' } })(),
+        multiTurnRules: DEFAULT_MULTI_TURN_TEXT,
+        sceneNear: DEFAULT_SCENE.near,
+        sceneCall: DEFAULT_SCENE.call,
+        identity: DEFAULT_IDENTITY_TEXT,
+      },
       heartbeat: {
         enabled: settings.heartbeat?.enabled !== false,
         everyMinutes: Math.max(3, Math.min(60, Number(settings.heartbeat?.everyMinutes ?? 10))),

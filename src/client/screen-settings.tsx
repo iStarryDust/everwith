@@ -38,6 +38,7 @@ type SettingsSnap = {
   intimacy: { level: number }
   multiTurn: { enabled: boolean; maxRounds: number; rules: string }
   mimoSpeech: string
+  defaults?: { mimoSpeech?: string; multiTurnRules?: string; sceneNear?: string; sceneCall?: string; identity?: string }
   heartbeat: { enabled: boolean; everyMinutes: number }
   traits: TraitRow[]
   screen: {
@@ -422,7 +423,7 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>分条规则</span>
           <textarea
             style={{ ...input, minHeight: 110, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={rulesDraft ?? cfg?.multiTurn?.rules ?? ''}
+            value={rulesDraft ?? (cfg?.multiTurn?.rules || cfg?.defaults?.multiTurnRules || '')}
             placeholder={'留空用内置那套：\n一条一句。这一条只写一句，写完就停。\n还想说下一句，在最后另起一行写 <!--more-->，然后停下来……'}
             disabled={busy || !cfg}
             onChange={(e) => setRulesDraft(e.target.value)}
@@ -441,7 +442,7 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>在身边的提示词</span>
           <textarea
             style={{ ...input, minHeight: 74, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={sceneDraft?.near ?? cfg?.scene?.near ?? ''}
+            value={sceneDraft?.near ?? (cfg?.scene?.near || cfg?.defaults?.sceneNear || '')}
             disabled={busy || !cfg}
             onChange={(e) => setSceneDraft({ near: e.target.value, call: sceneDraft?.call ?? cfg?.scene?.call ?? '' })}
             onBlur={() => {
@@ -453,7 +454,7 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>通话中的提示词</span>
           <textarea
             style={{ ...input, minHeight: 74, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={sceneDraft?.call ?? cfg?.scene?.call ?? ''}
+            value={sceneDraft?.call ?? (cfg?.scene?.call || cfg?.defaults?.sceneCall || '')}
             disabled={busy || !cfg}
             onChange={(e) => setSceneDraft({ near: sceneDraft?.near ?? cfg?.scene?.near ?? '', call: e.target.value })}
             onBlur={() => {
