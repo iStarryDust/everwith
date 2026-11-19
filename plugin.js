@@ -96,8 +96,8 @@ const DEFAULTS = {
   screen: {
     enabled: false,
     scope: 'full',
-    baseMinutes: 8,
-    minMinutes: 3,
+    baseMinutes: 12,
+    minMinutes: 6,
     maxMinutes: 45,
     nightFactor: 8,
     nightHours: [0, 7],

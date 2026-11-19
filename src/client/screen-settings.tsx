@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { SettingsRow as VoiceSettingsRow } from './voice/ui.tsx'
 
 const API = '/api/spoon-companion/screen'
 
@@ -203,6 +204,45 @@ export function ScreenSettingsSection() {
             </div>
           ) : null}
         </div>
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>主动说</div>
+        <div style={hint}>
+          命中「值得说」的钩子时：关 = 只看不说；攒着 = 留下一条冲动，等下次开口带出来；直接说 = 开一个新窗口说一句。
+        </div>
+        {cfg ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[
+              ['never', '只看不说'],
+              ['urge', '攒着'],
+              ['always', '直接说'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                disabled={busy}
+                onClick={() => void save({ speak: value })}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(128,128,128,0.35)',
+                  background: cfg.speak === value ? 'rgba(128,128,128,0.22)' : 'transparent',
+                  cursor: 'pointer',
+                  fontSize: 12.5,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>语音</div>
+        <div style={hint}>引擎、Key、音色、自动朗读都在这里。</div>
+        <VoiceSettingsRow defaultOpen />
       </div>
 
       {error ? <div style={{ color: '#d0563a', fontSize: 12 }}>{error}</div> : null}
