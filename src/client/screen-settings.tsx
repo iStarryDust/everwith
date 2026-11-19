@@ -36,7 +36,8 @@ type SettingsSnap = {
   soul: { name: string; language: string; prompt: string }
   scene: { near: string; call: string }
   intimacy: { level: number }
-  multiTurn: { enabled: boolean; maxRounds: number }
+  multiTurn: { enabled: boolean; maxRounds: number; rules: string }
+  mimoSpeech: string
   heartbeat: { enabled: boolean; everyMinutes: number }
   traits: TraitRow[]
   screen: {
@@ -101,6 +102,8 @@ export function ScreenSettingsSection() {
   const [identityDraft, setIdentityDraft] = useState<string | null>(null)
   const [soulDraft, setSoulDraft] = useState<{ name: string; language: string; prompt: string } | null>(null)
   const [sceneDraft, setSceneDraft] = useState<{ near: string; call: string } | null>(null)
+  const [rulesDraft, setRulesDraft] = useState<string | null>(null)
+  const [mimoDraft, setMimoDraft] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
   const [mic, setMic] = useState<MicSettings>(() => readMic())
 
@@ -416,6 +419,22 @@ export function ScreenSettingsSection() {
         </label>
         {cfg ? slider('最多几轮', cfg?.multiTurn?.maxRounds, 1, 6, '轮', (n) => void saveSettings({ multiTurn: { maxRounds: n } }), off || !cfg?.multiTurn?.enabled) : null}
         <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+          <span style={{ opacity: 0.8 }}>分条规则</span>
+          <textarea
+            style={{ ...input, minHeight: 110, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={rulesDraft ?? cfg?.multiTurn?.rules ?? ''}
+            placeholder={'留空用内置那套：\n一条一句。这一条只写一句，写完就停。\n还想说下一句，在最后另起一行写 <!--more-->，然后停下来……'}
+            disabled={busy || !cfg}
+            onChange={(e) => setRulesDraft(e.target.value)}
+            onBlur={() => {
+              if (rulesDraft === null) return
+              void saveSettings({ multiTurn: { rules: rulesDraft } })
+              setRulesDraft(null)
+            }}
+          />
+          <div style={hint}>「一条一句」和 more 标记的样子都在这儿改；留空就用内置那套。</div>
+        </div>
+        <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
           <div style={hint}>
             下面这两段跟着通话状态自动换 —— 就算上面「分条说话」关掉，它们也照样生效。
           </div>
@@ -462,6 +481,22 @@ export function ScreenSettingsSection() {
         <div style={rowTitle}>语音</div>
         <div style={hint}>引擎、Key、音色、自动朗读都在这里。</div>
         <VoiceSettingsRow defaultOpen />
+        <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+          <span style={{ opacity: 0.8 }}>小米播报规范</span>
+          <textarea
+            style={{ ...input, minHeight: 140, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={mimoDraft ?? cfg?.mimoSpeech ?? ''}
+            placeholder={'留空用内置那份：\n## 语音播报格式（当前通道：小米 MiMo TTS）\n你的回复会被直接转成语音播放……'}
+            disabled={busy || !cfg}
+            onChange={(e) => setMimoDraft(e.target.value)}
+            onBlur={() => {
+              if (mimoDraft === null) return
+              void saveSettings({ mimoSpeech: mimoDraft })
+              setMimoDraft(null)
+            }}
+          />
+          <div style={hint}>只在小米通道 + 通话中注入；留空用内置那份。</div>
+        </div>
       </div>
 
       <div style={group}>

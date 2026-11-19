@@ -80,6 +80,8 @@ const DEFAULTS = {
     charsPerSec: 15,
     jitterMs: 800,
     prompt: '<continue>（刚才那条已经发出去了。想再说一句就接着发,不用重新开头;没什么好说的就放着。）</continue>',
+    /** 分条规则全文覆盖:留空用内置那套 */
+    rules: '',
   },
   /** 性格基线覆盖,例如 { neuroticism: 70 } */
   traits: {},
@@ -95,6 +97,8 @@ const DEFAULTS = {
    */
   minimal: false,
   /** 场景提示词:在电话里 / 坐在旁边。分条说话关掉也照样生效。 */
+  /** 小米（MiMo）的播报格式规范覆盖:留空用内置那份 */
+  mimoSpeech: '',
   scene: {
     near: ['【在身边说话】', '她就在旁边，看得见人。说话自然，动作、体态、感官放在括号里。'].join('\n'),
     call: ['【正在通电话】', '看不见人，只有声音。说短句、口语，可以先说半句再补；不写动作和表情。'].join('\n'),
@@ -164,8 +168,15 @@ const MULTI_TURN_FORMAT = [
   '  错: 这一句 / 换行 / <!--more--> / 又接下一句 —— 标记下面不该有字',
 ]
 
-/** 分条规则:只管"怎么说几条",不管场景 */
-const multiTurnText = () => [...MULTI_TURN_RULES, '', ...MULTI_TURN_FORMAT].join('\n')
+/** 分条规则:只管"怎么说几条",不管场景。rules 非空就用配置里的那段。 */
+const multiTurnText = (rules) => {
+  const custom = String(rules ?? '').trim()
+  if (custom) return custom
+  return [...MULTI_TURN_RULES, '', ...MULTI_TURN_FORMAT].join('\n')
+}
+
+/** 分条规则的默认全文,给设置页当占位符 */
+export const DEFAULT_MULTI_TURN_TEXT = [...MULTI_TURN_RULES, '', ...MULTI_TURN_FORMAT].join('\n')
 
 /**
  * 场景:在电话里 / 坐在旁边,是两件事。
@@ -292,6 +303,7 @@ export function apply(ctx, config = {}) {
     if (saved.soul && typeof saved.soul === 'object') Object.assign(settings.soul, saved.soul)
     if (typeof saved.minimal === 'boolean') settings.minimal = saved.minimal
     if (saved.scene && typeof saved.scene === 'object') Object.assign(settings.scene, saved.scene)
+    if (typeof saved.mimoSpeech === 'string') settings.mimoSpeech = saved.mimoSpeech
   }
   applySettingsOverrides()
   /** 设置页改完节奏后,让定时器立刻按新值重排 */
@@ -814,7 +826,9 @@ export function apply(ctx, config = {}) {
       multiTurn: {
         enabled: settings.multiTurn?.enabled !== false,
         maxRounds: Math.max(1, Math.min(6, Number(settings.multiTurn?.maxRounds ?? 3))),
+        rules: String(settings.multiTurn?.rules ?? ''),
       },
+      mimoSpeech: String(settings.mimoSpeech ?? ''),
       heartbeat: {
         enabled: settings.heartbeat?.enabled !== false,
         everyMinutes: Math.max(3, Math.min(60, Number(settings.heartbeat?.everyMinutes ?? 10))),
@@ -905,6 +919,11 @@ export function apply(ctx, config = {}) {
               settings.multiTurn = { ...(settings.multiTurn ?? {}), enabled: body.multiTurn.enabled }
               next.enabled = body.multiTurn.enabled
             }
+            if (typeof body.multiTurn.rules === 'string') {
+              const rules = body.multiTurn.rules.replace(/\r\n/g, '\n')
+              settings.multiTurn = { ...(settings.multiTurn ?? {}), rules }
+              next.rules = rules
+            }
             if (body.multiTurn.maxRounds !== undefined) {
               const rounds = Math.max(1, Math.min(6, Math.round(Number(body.multiTurn.maxRounds) || 3)))
               settings.multiTurn = { ...(settings.multiTurn ?? {}), maxRounds: rounds }
@@ -924,6 +943,10 @@ export function apply(ctx, config = {}) {
               next.everyMinutes = every
             }
             patch.heartbeat = next
+          }
+          if (typeof body.mimoSpeech === 'string') {
+            settings.mimoSpeech = body.mimoSpeech.replace(/\r\n/g, '\n')
+            patch.mimoSpeech = settings.mimoSpeech
           }
           if (body.traits && typeof body.traits === 'object') {
             applyTraitOverride(body.traits)
@@ -1158,7 +1181,7 @@ export function apply(ctx, config = {}) {
       text: () => {
         if (settings.enabled === false) return ''
         if (settings.multiTurn?.enabled === false) return ''
-        return multiTurnText()
+        return multiTurnText(settings.multiTurn?.rules)
       },
     }), 'fish-mood: turns section')
     scope.effect(() => scope.systemPrompt.section({
@@ -1719,6 +1742,8 @@ export function apply(ctx, config = {}) {
 
     // 语音播报格式那段只在"通话中"注入:平时不朗读,写一堆标签规则只会干扰正常聊天。
     voicePlugin.setCallProbe?.(() => isCallActive())
+    // 小米规范可以在设置里覆盖;留空就用内置那份。
+    voicePlugin.setSpeechOverride?.(() => settings.mimoSpeech)
     voicePlugin.apply(ctx)
   } catch (error) {
     log('warn', `语音半边挂载失败（情绪系统继续工作）:${error instanceof Error ? error.message : String(error)}`)
