@@ -159,7 +159,7 @@ export function ScreenSettingsSection() {
   )
 
   const sc = screen?.state
-  const off = cfg ? !cfg.general.enabled : false
+  const off = cfg ? cfg?.general?.enabled !== true : false
 
   return (
     <div style={box}>
@@ -167,8 +167,8 @@ export function ScreenSettingsSection() {
         <div style={rowTitle}>Spoon 陪伴</div>
         <div style={hint}>整块暂停后：不注入心情段、三个工具都不工作、也不看屏幕。</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={cfg?.general.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ general: { enabled: e.target.checked } })} />
-          <span>{cfg?.general.enabled ? '开着' : '暂停中'}</span>
+          <input type="checkbox" checked={cfg?.general?.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ general: { enabled: e.target.checked } })} />
+          <span>{cfg?.general?.enabled ? '开着' : '暂停中'}</span>
         </label>
       </div>
 
@@ -182,11 +182,11 @@ export function ScreenSettingsSection() {
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="checkbox"
-            checked={cfg?.general.minimal === true}
+            checked={cfg?.general?.minimal === true}
             disabled={busy || !cfg}
             onChange={(e) => void saveSettings({ general: { minimal: e.target.checked } })}
           />
-          <span>{cfg?.general.minimal ? '极简 —— 只聊天' : '正常 —— 工具都在'}</span>
+          <span>{cfg?.general?.minimal ? '极简 —— 只聊天' : '正常 —— 工具都在'}</span>
         </label>
       </div>
 
@@ -275,10 +275,10 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>姓名</span>
           <input
             style={input}
-            value={soulDraft?.name ?? cfg?.soul.name ?? ''}
+            value={soulDraft?.name ?? cfg?.soul?.name ?? ''}
             placeholder="她的名字"
             disabled={busy || !cfg}
-            onChange={(e) => setSoulDraft({ name: e.target.value, language: soulDraft?.language ?? cfg?.soul.language ?? '', prompt: soulDraft?.prompt ?? cfg?.soul.prompt ?? '' })}
+            onChange={(e) => setSoulDraft({ name: e.target.value, language: soulDraft?.language ?? cfg?.soul?.language ?? '', prompt: soulDraft?.prompt ?? cfg?.soul?.prompt ?? '' })}
             onBlur={() => {
               if (!soulDraft) return
               void saveSettings({ soul: { name: soulDraft.name } })
@@ -290,10 +290,10 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>语言</span>
           <input
             style={input}
-            value={soulDraft?.language ?? cfg?.soul.language ?? ''}
+            value={soulDraft?.language ?? cfg?.soul?.language ?? ''}
             placeholder="中文"
             disabled={busy || !cfg}
-            onChange={(e) => setSoulDraft({ name: soulDraft?.name ?? cfg?.soul.name ?? '', language: e.target.value, prompt: soulDraft?.prompt ?? cfg?.soul.prompt ?? '' })}
+            onChange={(e) => setSoulDraft({ name: soulDraft?.name ?? cfg?.soul?.name ?? '', language: e.target.value, prompt: soulDraft?.prompt ?? cfg?.soul?.prompt ?? '' })}
             onBlur={() => {
               if (!soulDraft) return
               void saveSettings({ soul: { language: soulDraft.language } })
@@ -305,10 +305,10 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>人格提示词</span>
           <textarea
             style={{ ...input, minHeight: 220, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={soulDraft?.prompt ?? cfg?.soul.prompt ?? ''}
+            value={soulDraft?.prompt ?? cfg?.soul?.prompt ?? ''}
             placeholder="她是什么样的人、怎么说话、有什么习惯……"
             disabled={busy || !cfg}
-            onChange={(e) => setSoulDraft({ name: soulDraft?.name ?? cfg?.soul.name ?? '', language: soulDraft?.language ?? cfg?.soul.language ?? '', prompt: e.target.value })}
+            onChange={(e) => setSoulDraft({ name: soulDraft?.name ?? cfg?.soul?.name ?? '', language: soulDraft?.language ?? cfg?.soul?.language ?? '', prompt: e.target.value })}
             onBlur={() => {
               if (!soulDraft) return
               void saveSettings({ soul: { prompt: soulDraft.prompt } })
@@ -316,7 +316,7 @@ export function ScreenSettingsSection() {
             }}
           />
           <div style={hint}>
-            失焦即保存，下一句就生效。字数 {((soulDraft?.prompt ?? cfg?.soul.prompt ?? '') as string).length}
+            失焦即保存，下一句就生效。字数 {((soulDraft?.prompt ?? cfg?.soul?.prompt ?? '') as string).length}
           </div>
         </div>
       </div>
@@ -326,7 +326,7 @@ export function ScreenSettingsSection() {
         <div style={hint}>每轮跟着状态块带一句，防止长对话里人设漂。留空就用默认那句。</div>
         <input
           style={input}
-          value={identityDraft ?? cfg?.general.identity ?? ''}
+          value={identityDraft ?? cfg?.general?.identity ?? ''}
           placeholder="我就是我，不是在演谁；情绪是真的。"
           disabled={busy || !cfg}
           onChange={(e) => setIdentityDraft(e.target.value)}
@@ -342,16 +342,16 @@ export function ScreenSettingsSection() {
         <div style={rowTitle}>看屏幕</div>
         <div style={hint}>她偶尔走过去看一眼，不是监视。频率由情绪决定：孤单想看你，烦就不想看，困几乎不看。</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={cfg?.screen.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveScreen({ enabled: e.target.checked })} />
-          <span>{cfg?.screen.enabled ? '开着 —— 会自己看' : '关着 —— 一次都不截'}</span>
+          <input type="checkbox" checked={cfg?.screen?.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveScreen({ enabled: e.target.checked })} />
+          <span>{cfg?.screen?.enabled ? '开着 —— 会自己看' : '关着 —— 一次都不截'}</span>
         </label>
         {cfg
           ? [
-              slider('整体快慢', cfg.screen.baseMinutes, 2, 30, '分钟', (n) => void saveScreen({ baseMinutes: n }), off),
-              slider('最短', cfg.screen.minMinutes, 1, 15, '分钟', (n) => void saveScreen({ minMinutes: n }), off),
-              slider('最长', cfg.screen.maxMinutes, 10, 180, '分钟', (n) => void saveScreen({ maxMinutes: n }), off),
-              slider('深夜', cfg.screen.nightFactor, 2, 20, '×', (n) => void saveScreen({ nightFactor: n }), off),
-              slider('每天最多', cfg.screen.dailyLimit, 10, 500, '次', (n) => void saveScreen({ dailyLimit: n }), off),
+              slider('整体快慢', cfg?.screen?.baseMinutes, 2, 30, '分钟', (n) => void saveScreen({ baseMinutes: n }), off),
+              slider('最短', cfg?.screen?.minMinutes, 1, 15, '分钟', (n) => void saveScreen({ minMinutes: n }), off),
+              slider('最长', cfg?.screen?.maxMinutes, 10, 180, '分钟', (n) => void saveScreen({ maxMinutes: n }), off),
+              slider('深夜', cfg?.screen?.nightFactor, 2, 20, '×', (n) => void saveScreen({ nightFactor: n }), off),
+              slider('每天最多', cfg?.screen?.dailyLimit, 10, 500, '次', (n) => void saveScreen({ dailyLimit: n }), off),
             ]
           : null}
         <div style={hint}>深夜是低频，不是不看。8× 大约是每小时一次。</div>
@@ -372,7 +372,7 @@ export function ScreenSettingsSection() {
               ['urge', '攒着'],
               ['always', '开新窗口说'],
             ].map(([value, label]) => (
-              <button key={value} type="button" disabled={busy || off} onClick={() => void saveScreen({ speak: value })} style={pill(cfg.screen.speak === value)}>
+              <button key={value} type="button" disabled={busy || off} onClick={() => void saveScreen({ speak: value })} style={pill(cfg?.screen?.speak === value)}>
                 {label}
               </button>
             ))}
@@ -390,7 +390,7 @@ export function ScreenSettingsSection() {
               [1, '暧昧'],
               [2, '露骨'],
             ].map(([level, label]) => (
-              <button key={String(level)} type="button" disabled={busy || off} onClick={() => void saveSettings({ intimacy: { level } })} style={pill(cfg.intimacy.level === Number(level))}>
+              <button key={String(level)} type="button" disabled={busy || off} onClick={() => void saveSettings({ intimacy: { level } })} style={pill(cfg?.intimacy?.level === Number(level))}>
                 {label}
               </button>
             ))}
@@ -402,7 +402,7 @@ export function ScreenSettingsSection() {
         <div style={rowTitle}>性格</div>
         <div style={hint}>这几条是基线，会随着经历慢慢漂（最多 ±12）。改这里等于改起点。</div>
         {cfg
-          ? cfg.traits.map((trait) =>
+          ? (cfg?.traits ?? []).map((trait) =>
               slider(trait.name, trait.value, 0, 100, '', (n) => void saveSettings({ traits: { [trait.key]: n } }), off),
             )
           : null}
@@ -411,10 +411,10 @@ export function ScreenSettingsSection() {
       <div style={group}>
         <div style={rowTitle}>说话</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={cfg?.multiTurn.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ multiTurn: { enabled: e.target.checked } })} />
+          <input type="checkbox" checked={cfg?.multiTurn?.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ multiTurn: { enabled: e.target.checked } })} />
           <span>分条说话（一条一句，想接着说就在末尾留个标记）</span>
         </label>
-        {cfg ? slider('最多几轮', cfg.multiTurn.maxRounds, 1, 6, '轮', (n) => void saveSettings({ multiTurn: { maxRounds: n } }), off || !cfg.multiTurn.enabled) : null}
+        {cfg ? slider('最多几轮', cfg?.multiTurn?.maxRounds, 1, 6, '轮', (n) => void saveSettings({ multiTurn: { maxRounds: n } }), off || !cfg?.multiTurn?.enabled) : null}
         <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
           <div style={hint}>
             下面这两段跟着通话状态自动换 —— 就算上面「分条说话」关掉，它们也照样生效。
@@ -422,9 +422,9 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>在身边的提示词</span>
           <textarea
             style={{ ...input, minHeight: 74, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={sceneDraft?.near ?? cfg?.scene.near ?? ''}
+            value={sceneDraft?.near ?? cfg?.scene?.near ?? ''}
             disabled={busy || !cfg}
-            onChange={(e) => setSceneDraft({ near: e.target.value, call: sceneDraft?.call ?? cfg?.scene.call ?? '' })}
+            onChange={(e) => setSceneDraft({ near: e.target.value, call: sceneDraft?.call ?? cfg?.scene?.call ?? '' })}
             onBlur={() => {
               if (!sceneDraft) return
               void saveSettings({ scene: { near: sceneDraft.near } })
@@ -434,9 +434,9 @@ export function ScreenSettingsSection() {
           <span style={{ opacity: 0.8 }}>通话中的提示词</span>
           <textarea
             style={{ ...input, minHeight: 74, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={sceneDraft?.call ?? cfg?.scene.call ?? ''}
+            value={sceneDraft?.call ?? cfg?.scene?.call ?? ''}
             disabled={busy || !cfg}
-            onChange={(e) => setSceneDraft({ near: sceneDraft?.near ?? cfg?.scene.near ?? '', call: e.target.value })}
+            onChange={(e) => setSceneDraft({ near: sceneDraft?.near ?? cfg?.scene?.near ?? '', call: e.target.value })}
             onBlur={() => {
               if (!sceneDraft) return
               void saveSettings({ scene: { call: sceneDraft.call } })
@@ -450,11 +450,11 @@ export function ScreenSettingsSection() {
         <div style={rowTitle}>心跳</div>
         <div style={hint}>情绪衰减、自己的小事、反刍、心情修复、深夜复盘都靠它。</div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <input type="checkbox" checked={cfg?.heartbeat.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ heartbeat: { enabled: e.target.checked } })} />
+          <input type="checkbox" checked={cfg?.heartbeat?.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ heartbeat: { enabled: e.target.checked } })} />
           <span>开</span>
         </label>
         {cfg
-          ? slider('间隔', cfg.heartbeat.everyMinutes, 3, 60, '分钟', (n) => void saveSettings({ heartbeat: { everyMinutes: n } }), off || !cfg.heartbeat.enabled)
+          ? slider('间隔', cfg?.heartbeat?.everyMinutes, 3, 60, '分钟', (n) => void saveSettings({ heartbeat: { everyMinutes: n } }), off || !cfg?.heartbeat?.enabled)
           : null}
       </div>
 
