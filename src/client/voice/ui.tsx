@@ -291,6 +291,8 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
 
   const [dsKeyDraft, setDsKeyDraft] = useState('')
   const [mimoKeyDraft, setMimoKeyDraft] = useState('')
+  const [speechDraft, setSpeechDraft] = useState<string | null>(null)
+  const [speechSaved, setSpeechSaved] = useState('')
   const [styleDraft, setStyleDraft] = useState('')
   const fileInput = useRef<HTMLInputElement | null>(null)
 
@@ -312,6 +314,32 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
     const t = window.setInterval(() => { void refresh() }, open ? 2500 : 8000)
     return () => window.clearInterval(t)
   }, [open, refresh])
+
+  // 播报格式规范存在情绪插件那边(settings.mimoSpeech),这里直接读写
+  useEffect(() => {
+    let alive = true
+    void fetch('/api/spoon-companion/settings', { headers: { accept: 'application/json' } })
+      .then((r) => r.json())
+      .then((d) => { if (alive && typeof d?.mimoSpeech === 'string') setSpeechSaved(d.mimoSpeech) })
+      .catch(() => { /* 读不到就用默认 */ })
+    return () => { alive = false }
+  }, [])
+
+  const saveSpeech = async (text: string) => {
+    try {
+      await fetch('/api/spoon-companion/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mimoSpeech: text }),
+      })
+      setSpeechSaved(text)
+      setMsg('✓ 播报规范已保存')
+      setMsgOk(true)
+    } catch (e) {
+      setMsg(`保存失败：${(e as Error).message}`)
+      setMsgOk(false)
+    }
+  }
 
   const run = useCallback(async (label: string, fn: () => Promise<void>) => {
     setBusy(label)
@@ -480,6 +508,25 @@ export function SettingsRow({ defaultOpen = false }: { defaultOpen?: boolean } =
                 <div className="cv-hint">
                   正文里也可以插标签：开头写 <code>(慵懒)</code>、句中插 <code>[叹气]</code>、
                   <code>[轻笑]</code>、<code>[语速加快]</code> 等，模型会照着演。
+                </div>
+                <div className="cv-field">
+                  <label>播报格式规范（写给模型的规则，不是风格）</label>
+                  <textarea
+                    className="cv-textarea"
+                    style={{ minHeight: 130 }}
+                    value={speechDraft ?? speechSaved}
+                    spellCheck={false}
+                    onChange={(e) => setSpeechDraft(e.target.value)}
+                    onBlur={() => {
+                      if (speechDraft === null) return
+                      void saveSpeech(speechDraft)
+                      setSpeechDraft(null)
+                    }}
+                    placeholder={'留空用内置那份：\n## 语音播报格式\n只写要念出来的话，不要动作描写；用 (温柔) [轻笑] 这类标签控语气……'}
+                  />
+                  <div className="cv-hint">
+                    只在小米通道 + 通话中注入。留空 = 用内置那份；这一条存的是「怎么写」，跟上面的风格指令是两件事。
+                  </div>
                 </div>
                 <div className="cv-actions">
                   <button type="button" className="cv-ghost" onClick={() => { setStyleDraft(''); void patch({ mimoStyle: '' }, '已清空风格（中性自然）') }} disabled={busy !== ''}>清空风格</button>

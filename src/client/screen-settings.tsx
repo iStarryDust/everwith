@@ -479,24 +479,8 @@ export function ScreenSettingsSection() {
 
       <div style={group}>
         <div style={rowTitle}>语音</div>
-        <div style={hint}>引擎、Key、音色、自动朗读都在这里。</div>
+        <div style={hint}>引擎、Key、音色、播报规范、自动朗读都在这里。</div>
         <VoiceSettingsRow defaultOpen />
-        <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
-          <span style={{ opacity: 0.8 }}>小米播报规范</span>
-          <textarea
-            style={{ ...input, minHeight: 140, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
-            value={mimoDraft ?? cfg?.mimoSpeech ?? ''}
-            placeholder={'留空用内置那份：\n## 语音播报格式（当前通道：小米 MiMo TTS）\n你的回复会被直接转成语音播放……'}
-            disabled={busy || !cfg}
-            onChange={(e) => setMimoDraft(e.target.value)}
-            onBlur={() => {
-              if (mimoDraft === null) return
-              void saveSettings({ mimoSpeech: mimoDraft })
-              setMimoDraft(null)
-            }}
-          />
-          <div style={hint}>只在小米通道 + 通话中注入；留空用内置那份。</div>
-        </div>
       </div>
 
       <div style={group}>
