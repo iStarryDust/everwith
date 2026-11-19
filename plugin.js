@@ -34,6 +34,7 @@ import {
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
 import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
+import { DEFAULT_REMEMBER_PROMPT, appendEntry, parseEntries, readMemory, renderMemory, writeMemory } from './lib/memory.js'
 
 export const name = 'everwith'
 /** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
@@ -97,6 +98,8 @@ const DEFAULTS = {
    */
   minimal: false,
   /** 场景提示词:在电话里 / 坐在旁边。分条说话关掉也照样生效。 */
+  /** 长期档案:memory.md 里的东西,不衰减。prompt 是 remember 工具的方向说明 */
+  memory: { enabled: true, prompt: '' },
   /** 小米（MiMo）的播报格式规范覆盖:留空用内置那份 */
   mimoSpeech: '',
   scene: {
@@ -298,6 +301,7 @@ export function apply(ctx, config = {}) {
     if (typeof saved.minimal === 'boolean') settings.minimal = saved.minimal
     if (saved.scene && typeof saved.scene === 'object') Object.assign(settings.scene, saved.scene)
     if (typeof saved.mimoSpeech === 'string') settings.mimoSpeech = saved.mimoSpeech
+    if (saved.memory && typeof saved.memory === 'object') Object.assign(settings.memory, saved.memory)
   }
   applySettingsOverrides()
   /** 设置页改完节奏后,让定时器立刻按新值重排 */
@@ -704,6 +708,7 @@ export function apply(ctx, config = {}) {
     }), 'everwith: minimal restrict')
   }
 
+
   /** 看屏幕:设置页读这个拿配置和状态,写完立刻生效,不用重启 */
   ctx.effect(() => {
     const webServer = ctx.webServer ?? ctx.get('webServer')
@@ -823,6 +828,8 @@ export function apply(ctx, config = {}) {
         rules: String(settings.multiTurn?.rules ?? ''),
       },
       mimoSpeech: String(settings.mimoSpeech ?? ''),
+      memory: { enabled: settings.memory?.enabled !== false, prompt: String(settings.memory?.prompt ?? '') },
+      memoryText: (() => { try { return readMemory(stateDir) } catch { return '' } })(),
       defaults: {
         mimoSpeech: (() => { try { return String(voicePlugin.defaultSpeechText?.() ?? '') } catch { return '' } })(),
         multiTurnRules: DEFAULT_MULTI_TURN_TEXT,
@@ -945,6 +952,9 @@ export function apply(ctx, config = {}) {
               next.everyMinutes = every
             }
             patch.heartbeat = next
+          }
+          if (typeof body.memoryText === 'string') {
+            writeMemory(stateDir, body.memoryText.replace(/\r\n/g, '\n'))
           }
           if (typeof body.mimoSpeech === 'string') {
             settings.mimoSpeech = body.mimoSpeech.replace(/\r\n/g, '\n')
@@ -1165,6 +1175,22 @@ export function apply(ctx, config = {}) {
       text: stateSectionText,
     }), 'everwith: state section')
 
+    // 长期档案:人格之后、状态块之前。每轮重读文件,设置里存一下就生效。
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'everwith:memory',
+      order: 550,
+      text: (context) => {
+        if (settings.enabled === false) return ''
+        if (settings.memory?.enabled === false) return ''
+        const channel = channelOf(context)
+        if (!channel || !channelEnabled(channel, settings.channels)) return ''
+        const raw = readMemory(stateDir)
+        const body = renderMemory(raw)
+        if (!body) return ''
+        return '【记着的事】\n' + body
+      },
+    }), 'everwith: memory section')
+
     // 场景:在电话里 / 坐在旁边。独立于分条说话 —— 分条关掉也照样跟着通话状态换。
     scope.effect(() => scope.systemPrompt.section({
       name: 'everwith:scene',
@@ -1345,6 +1371,36 @@ export function apply(ctx, config = {}) {
   if (!tools?.register) {
     log('warn', 'tools 服务不可用,mood_* 工具未注册')
   } else {
+    tools.register({
+      name: 'remember',
+      // 描述可以在设置里改,用来调整「记什么」的方向;留空用内置那段。
+      description: () => String(settings.memory?.prompt ?? '').trim() || DEFAULT_REMEMBER_PROMPT,
+      parameters: {
+        type: 'object',
+        properties: {
+          content: { type: 'string', description: '一条要长期记住的事,写清楚到几个月后还能看懂' },
+        },
+        required: ['content'],
+        additionalProperties: false,
+      },
+      output: TEXT_OUTPUT,
+      async execute(args) {
+        const body = String(args.content ?? '').trim()
+        if (!body) return { text: '没写内容,没记。' }
+        const now = Date.now()
+        const out = appendEntry(readMemory(stateDir), body, now)
+        if (!out.added && !out.refreshed) return { text: '没写内容,没记。' }
+        if (!writeMemory(stateDir, out.text)) return { text: '写不进去,记忆没保存。' }
+        const count = parseEntries(out.text).length
+        audit({ kind: 'remember', added: out.added, refreshed: out.refreshed, chars: body.length })
+        return {
+          text: out.added
+            ? `记下了: ${body}\n(档案现在 ${count} 条)`
+            : `这条之前记过,时间已经刷新成现在: ${body}`,
+        }
+      },
+    })
+
     tools.register({
       name: 'mood_now',
       description:

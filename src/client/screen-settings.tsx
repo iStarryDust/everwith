@@ -38,6 +38,8 @@ type SettingsSnap = {
   intimacy: { level: number }
   multiTurn: { enabled: boolean; maxRounds: number; rules: string }
   mimoSpeech: string
+  memory?: { enabled: boolean; prompt: string }
+  memoryText?: string
   defaults?: { mimoSpeech?: string; multiTurnRules?: string; sceneNear?: string; sceneCall?: string; identity?: string }
   heartbeat: { enabled: boolean; everyMinutes: number }
   traits: TraitRow[]
@@ -105,6 +107,10 @@ export function ScreenSettingsSection() {
   const [sceneDraft, setSceneDraft] = useState<{ near: string; call: string } | null>(null)
   const [rulesDraft, setRulesDraft] = useState<string | null>(null)
   const [mimoDraft, setMimoDraft] = useState<string | null>(null)
+  const [memText, setMemText] = useState<string | null>(null)
+  const [memEntries, setMemEntries] = useState(0)
+  const [memBusy, setMemBusy] = useState(false)
+  const [memDraft, setMemDraft] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
   const [mic, setMic] = useState<MicSettings>(() => readMic())
 
@@ -122,6 +128,11 @@ export function ScreenSettingsSection() {
       if ((a as SettingsSnap)?.ok) setCfg(a as SettingsSnap)
       if ((b as ScreenSnap)?.ok) setScreen(b as ScreenSnap)
       if ((c as NowSnap)?.ok) setNowSnap(c as NowSnap)
+      if ((a as SettingsSnap)?.ok) {
+        const raw = String((a as { memoryText?: string }).memoryText ?? '')
+        setMemText(raw)
+        setMemEntries((raw.match(/^- \[/gm) ?? []).length)
+      }
       setError('')
     } catch (reason) {
       setError(String(reason))
@@ -151,6 +162,19 @@ export function ScreenSettingsSection() {
 
   const saveSettings = (patch: Record<string, unknown>) => post(API_SETTINGS, patch)
   const saveScreen = (patch: Record<string, unknown>) => post(API_SCREEN, patch)
+
+  // 记忆正文存在 memory.md,走 /settings 的 memoryText 字段
+  const saveMemory = async (text: string) => {
+    if (memBusy) return
+    setMemBusy(true)
+    try {
+      await saveSettings({ memoryText: text })
+      setMemText(text)
+      setMemEntries((text.match(/^- \[/gm) ?? []).length)
+    } finally {
+      setMemBusy(false)
+    }
+  }
 
   const slider = (label: string, value: number, min: number, max: number, suffix: string, onCommit: (next: number) => void, disabled = false) => (
     <label style={sliderRow} key={label}>
@@ -466,6 +490,58 @@ export function ScreenSettingsSection() {
         </div>
       </div>
 
+      <div style={group}>
+        <div style={rowTitle}>记忆</div>
+        <div style={hint}>
+          不会过期的那种：账号、路径、习惯、约定、谁是谁。跟上面「此刻的我」里那几条不一样——那些是情绪余温，14 天就淡了。
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={cfg?.memory?.enabled !== false}
+            disabled={busy || !cfg}
+            onChange={(e) => void saveSettings({ memory: { enabled: e.target.checked } })}
+          />
+          <span>开（关掉后这段不注入，档案还在盘上）</span>
+        </label>
+        <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+          <span style={{ opacity: 0.8 }}>档案（{memEntries} 条）</span>
+          <textarea
+            style={{ ...input, minHeight: 150, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={memDraft ?? memText ?? ''}
+            placeholder={'- [2026-10-27 15:54] 对方的 GitHub 是 iStarryDust'}
+            disabled={memBusy}
+            onChange={(e) => setMemDraft(e.target.value)}
+            onBlur={() => {
+              if (memDraft === null) return
+              void saveMemory(memDraft)
+              setMemDraft(null)
+            }}
+          />
+          <div style={hint}>一行一条，<code>- [时间] 内容</code>。标题和空行会原样保留；手写和模型记的混在同一份里。</div>
+        </div>
+        <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
+          <span style={{ opacity: 0.8 }}>记什么（remember 工具的方向）</span>
+          <textarea
+            style={{ ...input, minHeight: 96, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={cfg?.memory?.prompt ?? ''}
+            placeholder={'留空用内置那套：只记以后还用得上、又不会自己过期的前提——账号、路径、习惯、约定。不记一时的心情。'}
+            disabled={busy || !cfg}
+            onChange={(e) => void saveSettings({ memory: { prompt: e.target.value } })}
+          />
+          <div style={hint}>这段话就是 remember 工具的描述，改它等于换掉模型「记什么」的默认方向。</div>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            style={pill(false)}
+            disabled={memBusy}
+            onClick={() => { if (window.confirm('清空整份档案？文件会变成空的。')) void saveMemory('') }}
+          >
+            清空档案
+          </button>
+        </div>
+      </div>
       <div style={group}>
         <div style={rowTitle}>心跳</div>
         <div style={hint}>情绪衰减、自己的小事、反刍、心情修复、深夜复盘都靠它。</div>
