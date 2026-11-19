@@ -643,14 +643,26 @@ export function apply(ctx, config = {}) {
 
       // 情绪够浓才起作用,淡淡的就按默认走
       if (intensity >= 26) {
-        if (k === 'excited' || k === 'happy' || k === 'playful' || k === 'amused') {
+        // 受不住:说不出整句,别给第二句的机会
+        if (k === 'overstim') {
+          rounds = 1
+          speed = 0.8
+        } else if (k === 'excited' || k === 'happy' || k === 'playful' || k === 'amused') {
           rounds = Math.max(rounds, 4)
           speed = 0.7 // 急,接得快
+        } else if (k === 'aroused') {
+          rounds = Math.max(rounds, 4)
+          speed = 0.6 // 更急
+        } else if (k === 'needy') {
+          rounds = Math.max(rounds, 4)
+          speed = 0.55 // 最急,一直催
         } else if (
           k === 'sad' || k === 'down' || k === 'lonely' || k === 'disappointed' ||
           k === 'wronged' || k === 'tired' || k === 'sleepy'
         ) {
           rounds = 1 // 不想多话
+        } else if (k === 'shamed' || k === 'sated') {
+          rounds = 2 // 话少,但还没到一句都不想说
         }
       }
       // 想说出去的时候,多给一次

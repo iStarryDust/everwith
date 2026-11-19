@@ -1,6 +1,6 @@
 {
   "name": "@istarry/spoon-companion",
-  "version": "0.7.8",
+  "version": "0.7.9",
   "description": "让对话角色有自己的内心和声音：心情情绪随时间和对话自己演，回复一条一条发出来，能念出声（DeepSeek / 小米 MiMo），也能听得见——点麦克风说话，本地识别后直接发送。四块都能单独关。",
   "type": "module",
   "main": "plugin.js",
