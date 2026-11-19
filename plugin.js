@@ -722,9 +722,9 @@ export function apply(ctx, config = {}) {
     tools.register({
       name: 'mood_now',
       description:
-        '看自己现在什么心情:哪种情绪、多浓、为什么(评价),还有心情底色(愉快度/精力)、性格、身体(饿/困)、' +
+        '看当前心情:哪种情绪、多浓、为什么(评价),还有心情底色(愉快度/精力)、性格、身体(饿/困)、' +
         '跟这个人处得怎么样、今天发生的小事、心里还记着的事。' +
-        '想回答「你心情咋样」「你怎么了」,或者想先弄清自己现在该用什么语气,就用它。action=diag 是给自己排障用的。',
+        '面对「心情咋样」「怎么了」这类问题,或者要确定当前语气,用它。action=diag 是排障用的。',
       parameters: {
         type: 'object',
         properties: {
@@ -755,7 +755,7 @@ export function apply(ctx, config = {}) {
             `心情:${viewOf(session).view.mood.label} · 底色:愉快度 ${Math.round(state.core.valence)} · 精力 ${Math.round(state.core.energy)} · ${circadian(new Date()).label}`,
             `驱动:黏 ${((state.drives.cling ?? 0) * 100).toFixed(0)}% · 馋 ${((state.drives.craving ?? 0) * 100).toFixed(0)}% · 躁 ${((state.drives.restless ?? 0) * 100).toFixed(0)}% · 欠 ${((state.drives.undone ?? 0) * 100).toFixed(0)}% · 软 ${((state.drives.softness ?? 0) * 100).toFixed(0)}% · 想要 ${((state.drives.desire ?? 0) * 100).toFixed(0)}%`,
             `身体:泛红 ${((state.body?.flush ?? 0) * 100).toFixed(0)}% · 酥麻 ${((state.body?.tingle ?? 0) * 100).toFixed(0)}% · 体温 ${((state.body?.warmth ?? 0.5) * 100).toFixed(0)}% · 场景 ${state.scene?.phase ?? 'daily'}(尺度 ${state.intimacy?.level ?? 1}) · 饿 ${((state.drives.hunger ?? 0) * 100).toFixed(0)}% · 困 ${((state.drives.fatigue ?? 0) * 100).toFixed(0)}%`,
-            `统计:冲量 ${state.stats.impulses ?? 0} · 她自己记的 ${state.stats.feels ?? 0} · 小事 ${state.stats.lifeEvents ?? 0} · 反刍 ${state.stats.ruminated ?? 0} · 修复 ${state.stats.repairs ?? 0} · 复盘 ${state.stats.reviews ?? 0} · 性格微调 ${state.stats.traitShifts ?? 0} 次`,
+            `统计:冲量 ${state.stats.impulses ?? 0} · 自记的 ${state.stats.feels ?? 0} · 小事 ${state.stats.lifeEvents ?? 0} · 反刍 ${state.stats.ruminated ?? 0} · 修复 ${state.stats.repairs ?? 0} · 复盘 ${state.stats.reviews ?? 0} · 性格微调 ${state.stats.traitShifts ?? 0} 次`,
             `表现层:${state.emotion.hidden ? '憋着(表面装没事)' : '直接写在脸上'} · 累计憋着 ${Math.round(state.stats.maskedMinutes ?? 0)} 分钟 · 情绪续命 ${state.emotion.revives ?? 0} 次 · 待反刍 ${state.rumination.length} 条`,
             `关系账:${Object.keys(state.convs ?? {}).length} 个会话 · ${Object.keys(state.people ?? {}).length} 个人 · 日记 ${state.diary.length} 条 · 记忆点 ${state.memories.length} 个`,
           ]
@@ -790,9 +790,9 @@ export function apply(ctx, config = {}) {
     tools.register({
       name: 'mood_feel',
       description:
-        '记一笔心情 —— 注意这是**申请**:引擎有配额和饱和,会把「实际生效多少」告诉你。' +
+        '记一笔心情 —— 注意这是**申请**:引擎有配额和饱和,会回报「实际生效多少」。' +
         `情绪用这些词:${EMOTION_MENU}。` +
-        '被戳到、被感动、真的烦了、被人哄好了,用这个;想知道自己现在什么心情用 mood_now。' +
+        '被戳到、被感动、真的烦了、被人哄好了,用这个;要看当前心情用 mood_now。' +
         '为什么(why)写短一句,别写成作文。',
       parameters: {
         type: 'object',
@@ -801,7 +801,7 @@ export function apply(ctx, config = {}) {
           intensity: { type: 'number', description: '多浓,1-100,默认 45(淡淡的 20 / 挺浓 60 / 上头 85)' },
           why: { type: 'string', description: '一句为什么,短' },
           person: { type: 'string', description: '可选:跟谁有关(昵称或 openid)' },
-          warmth: { type: 'number', description: '可选:-20..20,这件事让你对这个人的感觉暖了多少/凉了多少' },
+          warmth: { type: 'number', description: '可选:-20..20,这件事对这个人暖了多少/凉了多少' },
           show: { type: 'boolean', description: '可选:想不想让对方看出来。false = 会嘴硬、装没事(感受和表现是两回事)' },
         },
         required: ['emotion'],
@@ -909,7 +909,7 @@ export function apply(ctx, config = {}) {
           remember(state, { kind: 'feel', key: state.emotion.key, intensity: 0, why: text.slice(0, 120) }, now)
           audit({ kind: 'diary-write', released, why: text.slice(0, 60) })
           commit()
-          return { text: `写下了${released ? `(心里松了 ${released} 分)` : ''}。这条只有你自己看得到。` }
+          return { text: `写下了${released ? `(心里松了 ${released} 分)` : ''}。这条只有自己看得到。` }
         }
         if (action === 'reflect') {
           state.lastReviewDay = ''
