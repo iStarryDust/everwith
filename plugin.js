@@ -102,15 +102,15 @@ const TEXT_OUTPUT = {
 }
 
 // 分条说话:告诉模型怎么标记"还没说完"
-// 通话模式：把"这是语音"这件事说清楚。
+// 通话口气不再由插件写死:标题换成「【正在通电话】」就够,要额外的口气再配 callMode.prompt。
 // 注意不要再写「语气用标签」这类规则 —— 语音格式那一段已经管了。
-const CALL_PROMPT = '现在是语音通话:回短句、口语,不用排版符号。'
 
 /**
- * 分条说话的规则有两套 —— 在不在通话里,写法完全不同:
- *   · 通话:看不见人,像打电话。短、口语、可以有停顿;绝不能有动作描写,会被念出来。
- *   · 不在通话:在身边。可以写动作(放括号里),但一条还是一句。
- * 两套都只讲「怎么分条」,不规定说什么 —— 内容归人格提示词。
+ * 分条说话只讲「怎么分条」,不规定口气和内容。
+ *   · 口气归配置(callMode.prompt)或人格提示词;
+ *   · 内容归人格提示词;
+ *   · 这里只负责:一条一句、要不要接着说、怎么标。
+ * 标题跟着通话状态换 —— 在电话里和坐在旁边,是两种场景。
  */
 const MULTI_TURN_RULES = [
   '一条一句。这一条只写一句,写完就停。',
@@ -120,22 +120,15 @@ const MULTI_TURN_RULES = [
   '说几句看当时有多少话,不用凑。',
 ]
 
-const MULTI_TURN_PROMPT_NEAR = [
-  '【在身边说话】',
-  ...MULTI_TURN_RULES,
-  '',
+const MULTI_TURN_FORMAT = [
   '格式对照:',
   '  对: 这一句 / 换行 / <!--more--> / 到此为止',
   '  错: 这一句 / 换行 / <!--more--> / 又接下一句 —— 标记下面不该有字',
-].join('\n')
+]
 
-const MULTI_TURN_PROMPT_CALL = [
-  '【正在通电话】',
-  '看不见人,只有声音。说话短、口语,可以有停顿,可以只说半句。',
-  ...MULTI_TURN_RULES,
-  '',
-  '不用排版符号:不要列表、标题、加粗、代码块。',
-].join('\n')
+/** 分条提示词:标题按场景换,规则不变 */
+const multiTurnText = (inCall) =>
+  [inCall ? '【正在通电话】' : '【在身边说话】', ...MULTI_TURN_RULES, '', ...MULTI_TURN_FORMAT].join('\n')
 
 export function mergeConfig(config = {}) {
   const merged = { ...DEFAULTS, ...config }
@@ -523,6 +516,10 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * 通话时额外插的那一句话。默认不插 —— 通话场景已经由分条提示词的标题
+   * 「【正在通电话】」说清了,再写一遍只会重复。要加自己的口气,配 callMode.prompt。
+   */
   const callSectionText = (context) => {
     try {
       const cfg = settings.callMode ?? {}
@@ -531,7 +528,7 @@ export function apply(ctx, config = {}) {
       const session = sessionOf(context)
       if (!session) return ''
       if (!inCallOf(context)) return ''
-      return String(cfg.prompt ?? '').trim() || CALL_PROMPT
+      return String(cfg.prompt ?? '').trim()
     } catch {
       return ''
     }
@@ -604,7 +601,7 @@ export function apply(ctx, config = {}) {
       order: 300,
       text: (context) => {
         if (settings.multiTurn?.enabled === false) return ''
-        return inCallOf(context) ? MULTI_TURN_PROMPT_CALL : MULTI_TURN_PROMPT_NEAR
+        return multiTurnText(inCallOf(context))
       },
     }), 'fish-mood: turns section')
     scope.effect(() => scope.systemPrompt.section({
