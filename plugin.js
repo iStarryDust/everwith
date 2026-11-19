@@ -30,7 +30,7 @@ import { EMOTION_KEYS, EMOTION_MENU, TRAITS, resolveEmotion, tierOf } from './li
 import { appraise } from './lib/appraise.js'
 import {
   applyImpulse, catharsis, circadian, decay, dueRumination, loadState, lookInterval, maybeLifeEvent, maybeMoodRepair,
-  nightlyReview, pruneState, remember, saveState, snapshot,
+  nightlyReview, pruneState, remember, saveState, screenHook, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
 import { RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection } from './lib/prompt.js'
@@ -104,6 +104,10 @@ const DEFAULTS = {
     dailyLimit: 120,
     maxEdge: 1280,
     exclude: [],
+    // 「值得说一句」的闸门:宁可一天不说,也不说废话
+    speak: 'never',
+    speakPerDay: 2,
+    speakCooldownMin: 120,
   },
 }
 
@@ -1223,6 +1227,24 @@ export function apply(ctx, config = {}) {
         sc.today = (Number(sc.today) || 0) + 1
         sc.fails = 0
         sc.nextAt = shot.at + lookInterval(state, settings.screen, shot.at).minutes * 60_000
+        // 值不值得说一句:只看标题,不额外调模型。宁可漏,不乱说。
+        const hook = screenHook(shot.title)
+        if (hook && sc.changed && settings.screen.speak !== 'never') {
+          const today = new Date(now).toDateString()
+          if (sc.talkDay !== today) {
+            sc.talkDay = today
+            sc.talkToday = 0
+          }
+          const cooldownMs = Math.max(10, Number(settings.screen.speakCooldownMin) || 120) * 60_000
+          const perDay = Math.max(1, Number(settings.screen.speakPerDay) || 2)
+          if (now - (Number(sc.talkAt) || 0) > cooldownMs && (Number(sc.talkToday) || 0) < perDay) {
+            sc.talkAt = now
+            sc.talkToday = (Number(sc.talkToday) || 0) + 1
+            sc.hook = hook
+            state.urges = { kind: 'share', until: now + 15 * 60_000, note: hook }
+            audit({ kind: 'screen-worthy', hook, title: String(shot.title ?? '').slice(0, 60) })
+          }
+        }
         audit({ kind: 'screen-look', auto: true, title: String(shot.title ?? '').slice(0, 60) })
         commit()
       } catch (error) {
