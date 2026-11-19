@@ -94,6 +94,8 @@ const DEFAULTS = {
    * 别的插件注册的工具还在工具表里 —— 只能靠这一段约束,宿主没有给插件关掉别人工具的接口。
    */
   minimal: false,
+  /** 场景提示词:在电话里 / 坐在旁边。分条说话关掉也照样生效。 */
+  scene: { near: DEFAULT_SCENE.near, call: DEFAULT_SCENE.call },
   /**
    * 亲密尺度:0 日常(不主动提性) / 1 暧昧(可以调情,不写过程) / 2 露骨(完整)。
    * 默认 1;切换只认显式配置,不从对话里猜。
@@ -159,15 +161,29 @@ const MULTI_TURN_FORMAT = [
   '  错: 这一句 / 换行 / <!--more--> / 又接下一句 —— 标记下面不该有字',
 ]
 
-/** 分条提示词:标题按场景换;在身边的写法要求(括号里写动作)只在非通话时出现 */
-const multiTurnText = (inCall) =>
-  [
-    inCall ? '【正在通电话】' : '【在身边说话】',
-    ...MULTI_TURN_RULES,
-    '',
-    ...(inCall ? [] : ['动作、体态、感官等放在括号里。', '']),
-    ...MULTI_TURN_FORMAT,
-  ].join('\n')
+/** 分条规则:只管"怎么说几条",不管场景 */
+const multiTurnText = () => [...MULTI_TURN_RULES, '', ...MULTI_TURN_FORMAT].join('\n')
+
+/**
+ * 场景:在电话里 / 坐在旁边,是两件事。
+ * 这一段独立于分条说话 —— 就算把分条关掉,场景还是会跟着通话状态换。
+ * 文案可以在设置里改。
+ */
+export const DEFAULT_SCENE = {
+  near: [
+    '【在身边说话】',
+    '她就在旁边，看得见人。说话自然，动作、体态、感官放在括号里。',
+  ].join('\n'),
+  call: [
+    '【正在通电话】',
+    '看不见人，只有声音。说短句、口语，可以先说半句再补；不写动作和表情。',
+  ].join('\n'),
+}
+
+export const sceneText = (inCall, scene) => {
+  const text = inCall ? scene?.call : scene?.near
+  return String(text ?? '').trim()
+}
 
 export function mergeConfig(config = {}) {
   const merged = { ...DEFAULTS, ...config }
@@ -178,6 +194,7 @@ export function mergeConfig(config = {}) {
   merged.intimacy = { ...DEFAULTS.intimacy, ...(config.intimacy ?? {}) }
   merged.screen = { ...DEFAULTS.screen, ...(config.screen ?? {}) }
   merged.soul = { ...DEFAULTS.soul, ...(config.soul ?? {}) }
+  merged.scene = { ...DEFAULTS.scene, ...(config.scene ?? {}) }
   merged.traits = { ...(config.traits ?? {}) }
   return merged
 }
@@ -271,6 +288,7 @@ export function apply(ctx, config = {}) {
     if (saved.traits && typeof saved.traits === 'object') applyTraitOverride(saved.traits)
     if (saved.soul && typeof saved.soul === 'object') Object.assign(settings.soul, saved.soul)
     if (typeof saved.minimal === 'boolean') settings.minimal = saved.minimal
+    if (saved.scene && typeof saved.scene === 'object') Object.assign(settings.scene, saved.scene)
   }
   applySettingsOverrides()
   /** 设置页改完节奏后,让定时器立刻按新值重排 */
@@ -785,6 +803,10 @@ export function apply(ctx, config = {}) {
         language: String(settings.soul?.language ?? ''),
         prompt: String(settings.soul?.prompt ?? ''),
       },
+      scene: {
+        near: String(settings.scene?.near ?? ''),
+        call: String(settings.scene?.call ?? ''),
+      },
       intimacy: { level: Math.max(0, Math.min(2, Number(settings.intimacy?.level ?? 1))) },
       multiTurn: {
         enabled: settings.multiTurn?.enabled !== false,
@@ -857,6 +879,16 @@ export function apply(ctx, config = {}) {
               next[key] = value
             }
             patch.soul = next
+          }
+          if (body.scene && typeof body.scene === 'object') {
+            const next = { ...(patch.scene ?? {}) }
+            for (const key of ['near', 'call']) {
+              if (typeof body.scene[key] !== 'string') continue
+              const value = body.scene[key].replace(/\r\n/g, '\n').trim()
+              settings.scene[key] = value
+              next[key] = value
+            }
+            patch.scene = next
           }
           if (body.intimacy && typeof body.intimacy === 'object' && body.intimacy.level !== undefined) {
             const level = Math.max(0, Math.min(2, Math.round(Number(body.intimacy.level) || 0)))
@@ -1100,6 +1132,19 @@ export function apply(ctx, config = {}) {
       text: stateSectionText,
     }), 'fish-mood: state section')
 
+    // 场景:在电话里 / 坐在旁边。独立于分条说话 —— 分条关掉也照样跟着通话状态换。
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:scene',
+      order: 290,
+      text: (context) => {
+        if (settings.enabled === false) return ''
+        if (settings.promptEnabled === false) return ''
+        const channel = channelOf(context)
+        if (!channel || !channelEnabled(channel, settings.channels)) return ''
+        return sceneText(inCallOf(context), settings.scene)
+      },
+    }), 'fish-mood: scene section')
+
     scope.effect(() => scope.systemPrompt.section({
       name: 'fish-mood:turns',
       // 300:放在前段,别往末尾挤。
@@ -1107,9 +1152,10 @@ export function apply(ctx, config = {}) {
       // 这段是"怎么写"的格式要求,不是"现在是什么状态",
       // 混到最后反而和语音格式那段打架。状态类的才该靠后。
       order: 300,
-      text: (context) => {
+      text: () => {
+        if (settings.enabled === false) return ''
         if (settings.multiTurn?.enabled === false) return ''
-        return multiTurnText(inCallOf(context))
+        return multiTurnText()
       },
     }), 'fish-mood: turns section')
     scope.effect(() => scope.systemPrompt.section({

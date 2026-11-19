@@ -34,6 +34,7 @@ type SettingsSnap = {
   now: number
   general: { enabled: boolean; identity: string; minimal: boolean }
   soul: { name: string; language: string; prompt: string }
+  scene: { near: string; call: string }
   intimacy: { level: number }
   multiTurn: { enabled: boolean; maxRounds: number }
   heartbeat: { enabled: boolean; everyMinutes: number }
@@ -99,6 +100,7 @@ export function ScreenSettingsSection() {
   const [error, setError] = useState('')
   const [identityDraft, setIdentityDraft] = useState<string | null>(null)
   const [soulDraft, setSoulDraft] = useState<{ name: string; language: string; prompt: string } | null>(null)
+  const [sceneDraft, setSceneDraft] = useState<{ near: string; call: string } | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
   const [mic, setMic] = useState<MicSettings>(() => readMic())
 
@@ -413,6 +415,35 @@ export function ScreenSettingsSection() {
           <span>分条说话（一条一句，想接着说就在末尾留个标记）</span>
         </label>
         {cfg ? slider('最多几轮', cfg.multiTurn.maxRounds, 1, 6, '轮', (n) => void saveSettings({ multiTurn: { maxRounds: n } }), off || !cfg.multiTurn.enabled) : null}
+        <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+          <div style={hint}>
+            下面这两段跟着通话状态自动换 —— 就算上面「分条说话」关掉，它们也照样生效。
+          </div>
+          <span style={{ opacity: 0.8 }}>在身边的提示词</span>
+          <textarea
+            style={{ ...input, minHeight: 74, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={sceneDraft?.near ?? cfg?.scene.near ?? ''}
+            disabled={busy || !cfg}
+            onChange={(e) => setSceneDraft({ near: e.target.value, call: sceneDraft?.call ?? cfg?.scene.call ?? '' })}
+            onBlur={() => {
+              if (!sceneDraft) return
+              void saveSettings({ scene: { near: sceneDraft.near } })
+              setSceneDraft(null)
+            }}
+          />
+          <span style={{ opacity: 0.8 }}>通话中的提示词</span>
+          <textarea
+            style={{ ...input, minHeight: 74, resize: 'vertical', lineHeight: 1.6, fontFamily: 'inherit' }}
+            value={sceneDraft?.call ?? cfg?.scene.call ?? ''}
+            disabled={busy || !cfg}
+            onChange={(e) => setSceneDraft({ near: sceneDraft?.near ?? cfg?.scene.near ?? '', call: e.target.value })}
+            onBlur={() => {
+              if (!sceneDraft) return
+              void saveSettings({ scene: { call: sceneDraft.call } })
+              setSceneDraft(null)
+            }}
+          />
+        </div>
       </div>
 
       <div style={group}>
