@@ -33,7 +33,7 @@ import {
   nightlyReview, pruneState, remember, saveState, screenHook, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
-import { RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection } from './lib/prompt.js'
+import { RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
 
 export const name = 'fish-mood'
 /** tools 是硬依赖:没有工具注册表这个插件没有任何意义 */
@@ -550,6 +550,56 @@ export function apply(ctx, config = {}) {
       return undefined
     }
   }, 'spoon-companion: call route')
+
+  /**
+   * 开一个新窗口说一句。
+   * 不自己拼 session/agent —— 走官方 schedule:建一条一次性任务,target=new,立刻触发。
+   * 新会话的创建、投递、持久化都交给 DSH,插件只负责"想说什么"。
+   */
+  /** 给她一句"情境":走过去看到了什么,想凑过去说一句 */
+  const speakPrompt = (hook, title) => {
+    const where = shortTitle(title) || '屏幕亮着'
+    return `（刚走过去看了一眼屏幕:${where}。${hook}。想凑过去说一句 —— 不解释为什么,也不用问"怎么了",直接开口就是。）`
+  }
+
+  const speakNow = async (text) => {
+    const schedule = (() => {
+      try { return ctx.get?.('schedule') ?? ctx.schedule } catch { return undefined }
+    })()
+    if (!schedule || typeof schedule.create !== 'function') return { ok: false, error: 'schedule 服务不可用' }
+    const prompt = String(text ?? '').trim()
+    if (!prompt) return { ok: false, error: '没有要说的话' }
+    const stamp = new Date(Date.now() + 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const rule = `DTSTART:${stamp}\nRRULE:FREQ=DAILY;COUNT=1`
+    const target = { kind: 'new' }
+    const title = '她突然想说一句'
+    const tries = [
+      { title, prompt, target, timing: { kind: 'once', at: stamp } },
+      { title, prompt, target, timing: { kind: 'rrule', rrule: rule } },
+      { title, prompt, target, timing: { kind: 'at', at: stamp } },
+      { title, prompt, target, timing: { kind: 'date', at: stamp } },
+      { prompt, target, timing: { kind: 'once', at: stamp } },
+    ]
+    const errors = []
+    for (const input of tries) {
+      try {
+        const task = await schedule.create(input)
+        const id = task?.id ?? task?.value?.id ?? task?.taskId
+        if (id && typeof schedule.run === 'function') {
+          try {
+            await schedule.run({ id })
+          } catch (error) {
+            errors.push(`run: ${String(error?.message ?? error).slice(0, 120)}`)
+          }
+        }
+        audit({ kind: 'speak-now', id, prompt: prompt.slice(0, 60) })
+        return { ok: true, id, shape: Object.keys(input).join(',') }
+      } catch (error) {
+        errors.push(String(error?.message ?? error).slice(0, 160))
+      }
+    }
+    return { ok: false, error: errors.join(' | ') }
+  }
 
   /** 看屏幕:设置页读这个拿配置和状态,写完立刻生效,不用重启 */
   ctx.effect(() => {
@@ -1241,8 +1291,13 @@ export function apply(ctx, config = {}) {
             sc.talkAt = now
             sc.talkToday = (Number(sc.talkToday) || 0) + 1
             sc.hook = hook
-            state.urges = { kind: 'share', until: now + 15 * 60_000, note: hook }
             audit({ kind: 'screen-worthy', hook, title: String(shot.title ?? '').slice(0, 60) })
+            if (settings.screen.speak === 'always') {
+              const said = await speakNow(speakPrompt(hook, shot.title))
+              audit({ kind: 'screen-speak', ok: said.ok, error: said.error })
+            } else {
+              state.urges = { kind: 'share', until: now + 15 * 60_000, note: hook }
+            }
           }
         }
         audit({ kind: 'screen-look', auto: true, title: String(shot.title ?? '').slice(0, 60) })
