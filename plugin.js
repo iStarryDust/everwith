@@ -82,6 +82,11 @@ const DEFAULTS = {
   },
   /** 性格基线覆盖,例如 { neuroticism: 70 } */
   traits: {},
+  /**
+   * 亲密尺度:0 日常(不主动提性) / 1 暧昧(可以调情,不写过程) / 2 露骨(完整)。
+   * 默认 1;切换只认显式配置,不从对话里猜。
+   */
+  intimacy: { level: 1 },
 }
 
 /** 工具输出统一成 { text }:模型看 render,程序调用方拿规范值,两边一致 */
@@ -122,6 +127,7 @@ export function mergeConfig(config = {}) {
   merged.react = { ...DEFAULTS.react, ...(config.react ?? {}) }
   merged.heartbeat = { ...DEFAULTS.heartbeat, ...(config.heartbeat ?? {}) }
   merged.feel = { ...DEFAULTS.feel, ...(config.feel ?? {}) }
+  merged.intimacy = { ...DEFAULTS.intimacy, ...(config.intimacy ?? {}) }
   merged.traits = { ...(config.traits ?? {}) }
   return merged
 }
@@ -143,6 +149,10 @@ export function apply(ctx, config = {}) {
   let state = loadState(stateDir)
   for (const [key, value] of Object.entries(settings.traits)) {
     if (TRAITS.some((trait) => trait.key === key) && Number.isFinite(Number(value))) state.traits[key] = Number(value)
+  }
+  // 亲密尺度以配置为准(账本里那份只是缓存)
+  if (Number.isFinite(Number(settings.intimacy?.level))) {
+    state.intimacy = { ...(state.intimacy ?? {}), level: Math.max(0, Math.min(2, Math.round(Number(settings.intimacy.level)))) }
   }
   const commit = () => {
     pruneState(state)
@@ -743,7 +753,8 @@ export function apply(ctx, config = {}) {
             `读到哪:seq ${state.seen[info.sessionId] ?? '(还没开始听)'} · 这轮待读 ${pending.length} 条`,
             `情绪:${state.emotion.key}(${Math.round(state.emotion.intensity)})${state.emotion.why ? ` · ${state.emotion.why}` : ''}`,
             `心情:${viewOf(session).view.mood.label} · 底色:愉快度 ${Math.round(state.core.valence)} · 精力 ${Math.round(state.core.energy)} · ${circadian(new Date()).label}`,
-            `驱动:饿 ${(state.drives.hunger * 100).toFixed(0)}% · 困 ${(state.drives.fatigue * 100).toFixed(0)}% · 社交 ${(state.drives.social * 100).toFixed(0)}%`,
+            `驱动:黏 ${((state.drives.cling ?? 0) * 100).toFixed(0)}% · 馋 ${((state.drives.craving ?? 0) * 100).toFixed(0)}% · 躁 ${((state.drives.restless ?? 0) * 100).toFixed(0)}% · 欠 ${((state.drives.undone ?? 0) * 100).toFixed(0)}% · 软 ${((state.drives.softness ?? 0) * 100).toFixed(0)}% · 想要 ${((state.drives.desire ?? 0) * 100).toFixed(0)}%`,
+            `身体:泛红 ${((state.body?.flush ?? 0) * 100).toFixed(0)}% · 酥麻 ${((state.body?.tingle ?? 0) * 100).toFixed(0)}% · 体温 ${((state.body?.warmth ?? 0.5) * 100).toFixed(0)}% · 场景 ${state.scene?.phase ?? 'daily'}(尺度 ${state.intimacy?.level ?? 1}) · 饿 ${((state.drives.hunger ?? 0) * 100).toFixed(0)}% · 困 ${((state.drives.fatigue ?? 0) * 100).toFixed(0)}%`,
             `统计:冲量 ${state.stats.impulses ?? 0} · 她自己记的 ${state.stats.feels ?? 0} · 小事 ${state.stats.lifeEvents ?? 0} · 反刍 ${state.stats.ruminated ?? 0} · 修复 ${state.stats.repairs ?? 0} · 复盘 ${state.stats.reviews ?? 0} · 性格微调 ${state.stats.traitShifts ?? 0} 次`,
             `表现层:${state.emotion.hidden ? '憋着(表面装没事)' : '直接写在脸上'} · 累计憋着 ${Math.round(state.stats.maskedMinutes ?? 0)} 分钟 · 情绪续命 ${state.emotion.revives ?? 0} 次 · 待反刍 ${state.rumination.length} 条`,
             `关系账:${Object.keys(state.convs ?? {}).length} 个会话 · ${Object.keys(state.people ?? {}).length} 个人 · 日记 ${state.diary.length} 条 · 记忆点 ${state.memories.length} 个`,
