@@ -32,7 +32,7 @@ type TraitRow = { key: string; name: string; base: number; value: number }
 type SettingsSnap = {
   ok: boolean
   now: number
-  general: { enabled: boolean; identity: string }
+  general: { enabled: boolean; identity: string; minimal: boolean }
   soul: { name: string; language: string; prompt: string }
   intimacy: { level: number }
   multiTurn: { enabled: boolean; maxRounds: number }
@@ -167,6 +167,24 @@ export function ScreenSettingsSection() {
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" checked={cfg?.general.enabled === true} disabled={busy || !cfg} onChange={(e) => void saveSettings({ general: { enabled: e.target.checked } })} />
           <span>{cfg?.general.enabled ? '开着' : '暂停中'}</span>
+        </label>
+      </div>
+
+      <div style={group}>
+        <div style={rowTitle}>极简模式</div>
+        <div style={hint}>
+          开着的时候，新对话里只聊天：插件自己的四个工具不注册、不看屏幕，提示词第一段就写"别用工具"。
+          别的插件注册的工具还在工具表里，只是被要求不要用 —— 宿主没有给插件关掉别人工具的接口。
+          改了要重载插件才生效。
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={cfg?.general.minimal === true}
+            disabled={busy || !cfg}
+            onChange={(e) => void saveSettings({ general: { minimal: e.target.checked } })}
+          />
+          <span>{cfg?.general.minimal ? '极简 —— 只聊天' : '正常 —— 工具都在'}</span>
         </label>
       </div>
 

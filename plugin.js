@@ -89,6 +89,12 @@ const DEFAULTS = {
    */
   soul: { name: '', language: '', prompt: '' },
   /**
+   * 极简模式:新对话里只留聊天。
+   * 插件自己的四个工具不注册、看屏幕停掉、提示词第一段就是"别用工具"。
+   * 别的插件注册的工具还在工具表里 —— 只能靠这一段约束,宿主没有给插件关掉别人工具的接口。
+   */
+  minimal: false,
+  /**
    * 亲密尺度:0 日常(不主动提性) / 1 暧昧(可以调情,不写过程) / 2 露骨(完整)。
    * 默认 1;切换只认显式配置,不从对话里猜。
    */
@@ -264,6 +270,7 @@ export function apply(ctx, config = {}) {
     if (saved.heartbeat && typeof saved.heartbeat === 'object') Object.assign(settings.heartbeat, saved.heartbeat)
     if (saved.traits && typeof saved.traits === 'object') applyTraitOverride(saved.traits)
     if (saved.soul && typeof saved.soul === 'object') Object.assign(settings.soul, saved.soul)
+    if (typeof saved.minimal === 'boolean') settings.minimal = saved.minimal
   }
   applySettingsOverrides()
   /** 设置页改完节奏后,让定时器立刻按新值重排 */
@@ -749,6 +756,7 @@ export function apply(ctx, config = {}) {
       general: {
         enabled: settings.enabled !== false,
         identity: String(settings.identity ?? ''),
+        minimal: settings.minimal === true,
       },
       soul: {
         name: String(settings.soul?.name ?? ''),
@@ -807,6 +815,10 @@ export function apply(ctx, config = {}) {
             if (typeof body.general.enabled === 'boolean') {
               settings.enabled = body.general.enabled
               patch.enabled = body.general.enabled
+            }
+            if (typeof body.general.minimal === 'boolean') {
+              settings.minimal = body.general.minimal
+              patch.minimal = body.general.minimal
             }
             if (typeof body.general.identity === 'string') {
               const text = body.general.identity.trim().slice(0, 200)
@@ -1035,6 +1047,20 @@ export function apply(ctx, config = {}) {
         ].join('\n\n')
       },
     }), 'fish-mood: soul section')
+    // 极简模式:紧跟在人设后面说一句"只聊天"
+    scope.effect(() => scope.systemPrompt.section({
+      name: 'fish-mood:minimal',
+      order: 1,
+      text: () => {
+        if (settings.enabled === false) return ''
+        if (settings.minimal !== true) return ''
+        return [
+          '【极简模式】',
+          '这一轮只聊天。不要调用任何工具 —— 不查文件、不跑命令、不用浏览器、不搜网、不记笔记。',
+          '需要知道什么就直接问,需要记什么就记在自己的话里。',
+        ].join('\n')
+      },
+    }), 'fish-mood: minimal section')
     scope.effect(() => scope.systemPrompt.section({
       name: 'fish-mood:rules',
       // 0 = 人设,500 = plan 策略:规则紧跟人设
@@ -1210,7 +1236,10 @@ export function apply(ctx, config = {}) {
 
   // ── 工具 ────────────────────────────────────────────────────────────────
   const tools = ctx.get('tools')
-  if (!tools?.register) {
+  if (settings.minimal === true) {
+    // 极简模式:自己的工具一个都不注册 —— 会话里就只剩聊天
+    log('info', '极简模式:四个工具都不注册,也不看屏幕')
+  } else if (!tools?.register) {
     log('warn', 'tools 服务不可用,mood_* 工具未注册')
   } else {
     tools.register({
@@ -1512,7 +1541,7 @@ export function apply(ctx, config = {}) {
   // ── 自己去看 ────────────────────────────────────────────────────────────
   // 到点了自己截一张,记下「刚才瞧见了什么」,不产生消息。
   // 节奏由情绪决定:孤单就短,烦就长,困就几乎不看。深夜不是不看,是低频。
-  if (settings.screen?.enabled === true && screenSupported()) {
+  if (settings.screen?.enabled === true && screenSupported() && settings.minimal !== true) {
     let stopped = false
     let timer = null
 
