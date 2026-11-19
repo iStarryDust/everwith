@@ -20,6 +20,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import * as voicePlugin from './lib/voice.js'
+import { capture, screenSupported } from './lib/screen.js'
 import { applyAsrRoutes } from './lib/asr-route.js'
 import { isCallActive, markCallSession, setCallGlobal } from './lib/asr.js'
 import { appendFileSync, readFileSync } from 'node:fs'
@@ -28,7 +29,7 @@ import { join } from 'node:path'
 import { EMOTION_KEYS, EMOTION_MENU, TRAITS, resolveEmotion, tierOf } from './lib/catalog.js'
 import { appraise } from './lib/appraise.js'
 import {
-  applyImpulse, catharsis, circadian, decay, dueRumination, loadState, maybeLifeEvent, maybeMoodRepair,
+  applyImpulse, catharsis, circadian, decay, dueRumination, loadState, lookInterval, maybeLifeEvent, maybeMoodRepair,
   nightlyReview, pruneState, remember, saveState, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
@@ -87,6 +88,23 @@ const DEFAULTS = {
    * 默认 1;切换只认显式配置,不从对话里猜。
    */
   intimacy: { level: 1 },
+  /**
+   * 看屏幕。默认关 —— 开了之后才会截图。
+   * 频率不是固定值:基础间隔再乘情绪系数,烦的时候自己拉长,孤单的时候缩短。
+   * 深夜不是不看,是乘一个倍率变成低频。
+   */
+  screen: {
+    enabled: false,
+    scope: 'full',
+    baseMinutes: 8,
+    minMinutes: 3,
+    maxMinutes: 45,
+    nightFactor: 8,
+    nightHours: [0, 7],
+    dailyLimit: 120,
+    maxEdge: 1280,
+    exclude: [],
+  },
 }
 
 /** 工具输出统一成 { text }:模型看 render,程序调用方拿规范值,两边一致 */
@@ -143,6 +161,7 @@ export function mergeConfig(config = {}) {
   merged.heartbeat = { ...DEFAULTS.heartbeat, ...(config.heartbeat ?? {}) }
   merged.feel = { ...DEFAULTS.feel, ...(config.feel ?? {}) }
   merged.intimacy = { ...DEFAULTS.intimacy, ...(config.intimacy ?? {}) }
+  merged.screen = { ...DEFAULTS.screen, ...(config.screen ?? {}) }
   merged.traits = { ...(config.traits ?? {}) }
   return merged
 }
@@ -968,6 +987,71 @@ export function apply(ctx, config = {}) {
         return { text: `最近 ${days} 天,记了 ${rows.length} 条:\n${renderDiary(rows)}` }
       },
     })
+
+    // 看屏幕:被动看。凑过去瞄一眼,不是常驻监视。
+    // 图交给调用方自己看(read_image),插件不解读 —— 解读走主动看那条线。
+    tools.register({
+      name: 'look_screen',
+      description:
+        '看一眼屏幕现在是什么样 —— 不是监视,是凑过去瞄一眼。' +
+        '返回一张图的路径;想知道画面里是什么,再用 read_image 打开它。' +
+        '这个功能关着的时候会直接说不看。',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: '可选:为什么想看(一句短的,只记在审计里)' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      output: TEXT_OUTPUT,
+      async execute(args) {
+        const now = Date.now()
+        if (settings.screen?.enabled !== true) {
+          return { text: '现在没在看屏幕。' }
+        }
+        if (!screenSupported()) {
+          return { text: '这台机器上截不了图(只支持 Windows)。' }
+        }
+        const sc = state.screen ?? (state.screen = {})
+        const day = new Date(now).toDateString()
+        if (sc.day !== day) {
+          sc.day = day
+          sc.today = 0
+        }
+        const limit = Math.max(1, Number(settings.screen.dailyLimit) || 120)
+        if ((Number(sc.today) || 0) >= limit) {
+          return { text: `今天看得够多了(${sc.today} 次),先歇会儿。` }
+        }
+        try {
+          const shot = await capture({ maxEdge: settings.screen.maxEdge })
+          const prevTitle = String(sc.title ?? '')
+          const changed = String(shot.title ?? '') !== prevTitle
+          sc.lastAt = shot.at
+          sc.path = shot.path
+          sc.title = shot.title
+          sc.changed = changed
+          sc.today = (Number(sc.today) || 0) + 1
+          sc.fails = 0
+          sc.nextAt = shot.at + lookInterval(state, settings.screen, shot.at).minutes * 60_000
+          audit({ kind: 'screen-look', path: shot.path, bytes: shot.bytes, why: String(args.reason ?? '').slice(0, 60) })
+          commit()
+          const where = shot.title ? `屏幕上停在「${shot.title}」` : '屏幕上是亮的'
+          return {
+            text:
+              `看了一眼 —— ${where}。\n` +
+              `图在这里,想知道画面细节就用 read_image 打开:\n${shot.path}\n` +
+              `(${shot.width}x${shot.height}, ${Math.round(shot.bytes / 1024)} KB)`,
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error)
+          sc.fails = (Number(sc.fails) || 0) + 1
+          sc.nextAt = Date.now() + Math.min(60, 5 * sc.fails) * 60_000
+          audit({ kind: 'screen-fail', error: msg.slice(0, 120) })
+          return { text: `没截到:${msg}` }
+        }
+      },
+    })
   }
 
   // ── 心跳 ────────────────────────────────────────────────────────────────
@@ -988,6 +1072,71 @@ export function apply(ctx, config = {}) {
       clearTimeout(first)
       clearInterval(timer)
     }, 'fish-mood: heartbeat')
+  }
+
+  // ── 自己去看 ────────────────────────────────────────────────────────────
+  // 到点了自己截一张,记下「刚才瞧见了什么」,不产生消息。
+  // 节奏由情绪决定:孤单就短,烦就长,困就几乎不看。深夜不是不看,是低频。
+  if (settings.screen?.enabled === true && screenSupported()) {
+    let stopped = false
+    let timer = null
+
+    const nextDelay = () => {
+      const now = Date.now()
+      const plan = lookInterval(state, settings.screen, now)
+      const at = Number(state.screen?.nextAt) || 0
+      const due = at > now ? at : now + plan.minutes * 60_000
+      return Math.max(20_000, Math.min(due - now, 60 * 60_000))
+    }
+
+    const tick = async () => {
+      if (stopped) return
+      const now = Date.now()
+      const sc = state.screen ?? (state.screen = {})
+      const day = new Date(now).toDateString()
+      if (sc.day !== day) {
+        sc.day = day
+        sc.today = 0
+      }
+      const limit = Math.max(1, Number(settings.screen.dailyLimit) || 120)
+      if ((Number(sc.today) || 0) >= limit) {
+        sc.nextAt = now + 3_600_000
+        return
+      }
+      try {
+        const shot = await capture({ maxEdge: settings.screen.maxEdge })
+        const prevTitle = String(sc.title ?? '')
+        sc.lastAt = shot.at
+        sc.path = shot.path
+        sc.title = shot.title
+        sc.changed = String(shot.title ?? '') !== prevTitle
+        sc.today = (Number(sc.today) || 0) + 1
+        sc.fails = 0
+        sc.nextAt = shot.at + lookInterval(state, settings.screen, shot.at).minutes * 60_000
+        audit({ kind: 'screen-look', auto: true, title: String(shot.title ?? '').slice(0, 60) })
+        commit()
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error)
+        sc.fails = (Number(sc.fails) || 0) + 1
+        // 截不到就退避:5、10、15……最多一小时
+        sc.nextAt = now + Math.min(60, 5 * sc.fails) * 60_000
+        audit({ kind: 'screen-fail', auto: true, error: msg.slice(0, 120) })
+        commit()
+      }
+    }
+
+    const loop = () => {
+      if (stopped) return
+      timer = setTimeout(async () => {
+        await tick()
+        loop()
+      }, nextDelay())
+    }
+    loop()
+    ctx.effect(() => () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }, 'fish-mood: screen loop')
   }
 
   // ── 语音 ────────────────────────────────────────────────────────────────
