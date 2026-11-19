@@ -1187,7 +1187,8 @@ export function apply(ctx, config = {}) {
         const raw = readMemory(stateDir)
         const body = renderMemory(raw)
         if (!body) return ''
-        return '【记着的事】\n' + body
+        const guide = String(settings.memory?.prompt ?? '').trim() || DEFAULT_REMEMBER_PROMPT
+        return '【记着的事】\n' + body + (guide ? '\n\n该记什么:' + guide : '')
       },
     }), 'everwith: memory section')
 
@@ -1374,7 +1375,9 @@ export function apply(ctx, config = {}) {
     tools.register({
       name: 'remember',
       // 描述可以在设置里改,用来调整「记什么」的方向;留空用内置那段。
-      description: () => String(settings.memory?.prompt ?? '').trim() || DEFAULT_REMEMBER_PROMPT,
+      description:
+        '记一条长期记忆:以后还用得上、又不会自己过期的前提(账号、路径、习惯、约定、谁是谁)。' +
+        '一条只写一件事,写清楚到几个月后还能看懂。记什么的方向在设置里调,当前方向会写在提示词的状态块里。',
       parameters: {
         type: 'object',
         properties: {
