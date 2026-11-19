@@ -649,9 +649,10 @@ export function apply(ctx, config = {}) {
    * 新会话的创建、投递、持久化都交给 DSH,插件只负责"想说什么"。
    */
   /** 给她一句"情境":走过去看到了什么,想凑过去说一句 */
-  const speakPrompt = (hook, title) => {
-    const where = shortTitle(title) || '屏幕亮着'
-    return `（刚走过去看了一眼屏幕:${where}。${hook}。想凑过去说一句 —— 不解释为什么,也不用问"怎么了",直接开口就是。）`
+  const speakPrompt = (text, title, count = 1) => {
+    const what = String(text ?? '').trim() || shortTitle(title) || '屏幕上亮着'
+    const times = count >= 3 ? `已经 ${count} 次了` : '已经看了好一会儿'
+    return `（一直在看这件事:${what}，${times}。心里越来越放不下，想开口说一句 —— 不解释为什么，也不用问"怎么了"，直接说。）`
   }
 
   const speakNow = async (text) => {
@@ -1741,10 +1742,10 @@ export function apply(ctx, config = {}) {
               let lookPath = shot.path
               try { lookPath = (await capture({ maxEdge: 640 })).path } catch { /* 截不到就用原图 */ }
               const d = await describeShot({ llm: svc, attachments: ctx.get('attachments'), callConfig: cfg, sessionId: who.session.id, imagePath: lookPath, title: shot.title })
-              if (d) {
-                pushOrTouch(sc, d, shot.at, shot.title)
+              if (d?.text) {
+                pushOrTouch(sc, d.text, shot.at, shot.title, d.score)
                 sc.lastUnderstandAt = shot.at
-                audit({ kind: 'screen-understand', where: 'tool', text: d.slice(0, 60) })
+                audit({ kind: 'screen-understand', where: 'tool', text: d.text.slice(0, 50), score: d.score })
               }
             }
           } catch (error) {
@@ -1795,18 +1796,35 @@ export function apply(ctx, config = {}) {
    * 还是同一件事(按 screenHook 归类)就只把最后看见的时间往后推,不新增条目 ——
    * 这样连续看一下午直播,仍是一条带首尾时间的事,不是一长串重复。
    */
-  const pushOrTouch = (sc, text, at, title) => {
+  const pushOrTouch = (sc, text, at, title, score = 0) => {
     const list = Array.isArray(sc.seen) ? sc.seen : (sc.seen = [])
     const hook = screenHook(title) || ''
     const last = list[list.length - 1]
     if (last && hook && last.hook === hook) {
       last.text = text
       last.at = at
+      last.score = Number(score) || 0
       return
     }
-    list.push({ at, text, firstAt: at, hook })
+    list.push({ at, text, score: Number(score) || 0, firstAt: at, hook })
     while (list.length > 10) list.shift()
   }
+  /** 她这会儿有多想开口说一句(0-100)。按情绪算,不用新数据。 */
+  const EAGER_BY_EMOTION = {
+    curious: 80, excited: 85, playful: 76, amused: 72, surprised: 70, proud: 68,
+    happy: 65, moved: 62, close: 55, tender: 50, grateful: 58,
+    content: 45, sated: 40, gentle: 45, shy: 40, awkward: 30, guilty: 25, bored: 22,
+    down: 12, sad: 10, annoyed: 8, angry: 6, tired: 5, sleepy: 3, disappointed: 10,
+    wronged: 8, lonely: 25, needy: 30, confused: 25, worried: 30, nervous: 25, jealous: 20,
+  }
+  const speakEagerness = (state) => {
+    const key = String(state?.emotion?.key ?? 'content')
+    const intensity = Math.max(0, Math.min(100, Number(state?.emotion?.intensity) || 0))
+    const base = EAGER_BY_EMOTION[key] ?? 40
+    // 情绪很淡的时候往中间拉,别让一点点情绪撑起整个冲动
+    return Math.round(base * 0.65 + intensity * 0.35)
+  }
+
   /** 这一次截图要不要交给视觉模型看懂 */
   const shouldUnderstand = (prev, title, now, sc) => {
     const mode = String(settings.screen?.understand ?? 'smart')
@@ -1877,10 +1895,10 @@ export function apply(ctx, config = {}) {
               let lookPath = shot.path
               try { lookPath = (await capture({ maxEdge: 640 })).path } catch { /* 截不到就用原图 */ }
               const desc = await describeShot({ llm, attachments: ctx.get('attachments'), callConfig, sessionId: agent.session.id, imagePath: lookPath, title: shot.title })
-              if (desc) {
-                pushOrTouch(sc, desc, shot.at, shot.title)
+              if (desc?.text) {
+                pushOrTouch(sc, desc.text, shot.at, shot.title, desc.score)
                 sc.lastUnderstandAt = shot.at
-                audit({ kind: 'screen-understand', text: desc.slice(0, 60) })
+                audit({ kind: 'screen-understand', text: desc.text.slice(0, 50), score: desc.score })
               }
             }
           } else {
@@ -1893,24 +1911,37 @@ export function apply(ctx, config = {}) {
           /* 看不懂就算了,截图本身照旧;记一笔免得静默失败查不到 */
           audit({ kind: 'screen-understand-fail', error: String(error?.message ?? error).slice(0, 120) })
         }
-        // 值不值得说一句:只看标题,不额外调模型。宁可漏,不乱说。
-        const hook = screenHook(shot.title)
-        if (hook && sc.changed && settings.screen.speak !== 'never') {
-          const today = new Date(now).toDateString()
-          if (sc.talkDay !== today) {
-            sc.talkDay = today
-            sc.talkToday = 0
-          }
-          const cooldownMs = Math.max(10, Number(settings.screen.speakCooldownMin) || 120) * 60_000
-          const perDay = Math.max(1, Number(settings.screen.speakPerDay) || 2)
-          if (now - (Number(sc.talkAt) || 0) > cooldownMs && (Number(sc.talkToday) || 0) < perDay) {
-            sc.talkAt = now
-            sc.talkToday = (Number(sc.talkToday) || 0) + 1
-            sc.hook = hook
-            audit({ kind: 'screen-worthy', hook, title: String(shot.title ?? '').slice(0, 60) })
-            if (settings.screen.speak === 'always') {
-              const said = await speakNow(speakPrompt(hook, shot.title))
-              audit({ kind: 'screen-speak', ok: said.ok, error: said.error })
+        // 值得说一句吗:图评分 × 她多想开口,攒够了才说。宁可漏,不乱说。
+        const latestSeen = (Array.isArray(sc.seen) ? sc.seen : [])[Math.max(0, (Array.isArray(sc.seen) ? sc.seen.length : 0) - 1)]
+        const shotScore = Number(latestSeen?.score) || 0
+        const talkOn = settings.screen.speak === 'always'
+        if (talkOn && shotScore >= 40) {
+          const eager = speakEagerness(state)
+          // 图多值得说 六成,她自己多想开口 四成
+          const urgeScore = Math.round(shotScore * 0.6 + eager * 0.4)
+          const hookNow = String(latestSeen?.text ?? '').trim() || screenHook(shot.title) || ''
+          const prev = sc.urge && typeof sc.urge === 'object' ? sc.urge : {}
+          // 同一件事,10 分钟内连着看到才算累积
+          const sameRun = prev.hook && prev.hook === hookNow && now - (Number(prev.at) || 0) < 10 * 60_000
+          const count = sameRun ? (Number(prev.count) || 1) + 1 : 1
+          sc.urge = { hook: hookNow, urge: urgeScore, at: now, count }
+          audit({ kind: 'screen-urge', urge: urgeScore, count, score: shotScore, eager, hook: hookNow.slice(0, 40) })
+
+          // 看了不止一次、冲动够强,才真的开口
+          if (count >= 2 && urgeScore >= 75) {
+            const today = new Date(now).toDateString()
+            if (sc.talkDay !== today) {
+              sc.talkDay = today
+              sc.talkToday = 0
+            }
+            const cooldownMs = Math.max(10, Number(settings.screen.speakCooldownMin) || 120) * 60_000
+            const perDay = Math.max(1, Number(settings.screen.speakPerDay) || 2)
+            if (now - (Number(sc.talkAt) || 0) > cooldownMs && (Number(sc.talkToday) || 0) < perDay) {
+              sc.talkAt = now
+              sc.talkToday = (Number(sc.talkToday) || 0) + 1
+              sc.hook = hookNow
+              const said = await speakNow(speakPrompt(latestSeen?.text, shot.title, count))
+              audit({ kind: 'screen-speak', ok: said.ok, error: said.error, urge: urgeScore, count })
             }
           }
         }
