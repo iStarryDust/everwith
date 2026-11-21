@@ -1,6 +1,6 @@
 {
   "name": "@istarry/dsh-everwith",
-  "version": "1.4.7",
+  "version": "1.4.8",
   "description": "给你对话框里的人：情绪、记忆、嗓子、眼睛。40 种情绪会涨会消，两层记忆记着账号和约定，说话一条一句像发消息，能出声也能听你说话，偶尔看一眼屏幕但只记在心里。",
   "type": "module",
   "main": "plugin.js",

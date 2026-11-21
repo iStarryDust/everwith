@@ -34,6 +34,7 @@ import {
   nightlyReview, pruneState, remember, saveState, screenHook, snapshot,
 } from './lib/state.js'
 import { channelOfSession, lastSpeaker, readUserMessages, reactToMessages, sessionEventsOf } from './lib/react.js'
+import { guardRoute, makeRequestGate } from './lib/guard.js'
 import { DEFAULT_IDENTITY as DEFAULT_IDENTITY_TEXT, DEFAULT_LOOK_TEMPLATE, RULES_TEXT, renderDiary, renderMoodReport, renderMoodSection, shortTitle } from './lib/prompt.js'
 import { DEFAULT_REMEMBER_PROMPT, REMEMBER_INSTRUCTION, appendEntry, cleanExtracted, parseEntries, readMemory, renderMemory, writeMemory } from './lib/memory.js'
 
@@ -263,6 +264,8 @@ export function mergeConfig(config = {}) {
 export function apply(ctx, config = {}) {
   const settings = mergeConfig(config)
   const stateDir = settings.stateDir || join(homedir(), '.dsh', 'everwith')
+  /** 宿主那道访问检查：Host/Origin 不对 403，没登录 401，放行 0 */
+  const rejectRequest = makeRequestGate(ctx)
   const log = (level, text) => {
     try {
       const logger = ctx.logger ?? ctx.get?.('logger')
@@ -679,7 +682,7 @@ export function apply(ctx, config = {}) {
       },
     }
     try {
-      const dispose = webServer.register(route)
+      const dispose = webServer.register(guardRoute(route, rejectRequest))
       return () => { try { dispose?.() } catch { /* ignore */ } }
     } catch (error) {
       log('warn', `通话按钮通道注册失败:${error instanceof Error ? error.message : String(error)}`)
@@ -866,7 +869,7 @@ export function apply(ctx, config = {}) {
         }
       },
     }
-    const dispose = webServer.register(route)
+    const dispose = webServer.register(guardRoute(route, rejectRequest))
     return () => {
       try { dispose?.() } catch { /* ignore */ }
     }
@@ -1103,7 +1106,7 @@ export function apply(ctx, config = {}) {
         }
       },
     }
-    const dispose = webServer.register(route)
+    const dispose = webServer.register(guardRoute(route, rejectRequest))
     return () => {
       try { dispose?.() } catch { /* ignore */ }
     }
@@ -1169,7 +1172,7 @@ export function apply(ctx, config = {}) {
         }
       },
     }
-    const dispose = webServer.register(route)
+    const dispose = webServer.register(guardRoute(route, rejectRequest))
     return () => {
       try { dispose?.() } catch { /* ignore */ }
     }
