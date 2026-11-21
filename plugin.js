@@ -1842,12 +1842,13 @@ export function apply(ctx, config = {}) {
   // ── 自己去看 ────────────────────────────────────────────────────────────
   // 到点了自己截一张,记下「刚才瞧见了什么」,不产生消息。
   // 节奏由情绪决定:孤单就短,烦就长,困就几乎不看。深夜不是不看,是低频。
-  if (settings.screen?.enabled === true && screenSupported() && settings.minimal !== true) {
+  if (screenSupported() && settings.minimal !== true) {
     let stopped = false
     let timer = null
 
     const nextDelay = () => {
       const now = Date.now()
+      if (settings.screen?.enabled !== true) return 60_000
       const plan = lookInterval(state, settings.screen, now)
       const at = Number(state.screen?.nextAt) || 0
       const intervalMs = plan.minutes * 60_000
@@ -1860,6 +1861,7 @@ export function apply(ctx, config = {}) {
 
     const tick = async () => {
       if (stopped) return
+      if (settings.screen?.enabled !== true) return
       const now = Date.now()
       const sc = state.screen ?? (state.screen = {})
       const day = new Date(now).toDateString()

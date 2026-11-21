@@ -15,6 +15,18 @@
  */
 import type { ChatSnapshot, UseChat } from '@deepseek-ai/dsh-client-ui-chat/client'
 
+/**
+ * 连续发送用的分隔标记。界面由 cleanup 擦掉,但语音是从快照原文读的,
+ * 不擦就会把 `<!--more-->` 念出来。换成换行,TTS 会自然停顿。
+ */
+const MORE_MARKERS = [/<!--\s*more\s*-->/gi, /\[\[\s*more\s*\]\]/gi]
+
+function stripMarkers(text: string): string {
+  let out = text
+  for (const re of MORE_MARKERS) out = out.replace(re, '\n')
+  return out.replace(/\n{3,}/g, '\n\n').trim()
+}
+
 /** 一条助手消息的可见文本（只取 text 块，跳过思维链与工具调用）。 */
 export function assistantTextOf(snapshot: ChatSnapshot, messageId: string): string {
   for (const node of snapshot.legacy.nodes) {
@@ -24,7 +36,7 @@ export function assistantTextOf(snapshot: ChatSnapshot, messageId: string): stri
     for (const block of node.blocks) {
       if (block.kind === 'text') parts.push(block.text)
     }
-    return parts.join('\n\n').trim()
+    return stripMarkers(parts.join('\n\n'))
   }
   return ''
 }
@@ -86,7 +98,7 @@ function turnNodes(snapshot: ChatSnapshot): TurnNode[] {
       messageId: String(node.messageId),
       // 优先用 turn 的标量 id；抽不到就留空，稍后按「本轮首个 messageId」补齐
       turnKey: turnScalarId(turn),
-      text: parts.join('\n').trim(),
+      text: stripMarkers(parts.join('\n')),
       time: normalizeTime((node as { time?: unknown }).time),
     })
   }

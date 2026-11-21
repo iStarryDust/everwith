@@ -258,7 +258,7 @@ export function ScreenSettingsSection() {
               ) : null}
               {nowSnap.scene ? (
                 <div style={kv}>
-                  <span style={{ opacity: 0.6 }}>场景</span>
+                  <span style={{ opacity: 0.6 }}>亲密</span>
                   <span>
                     {nowSnap.scene.word}
                     {nowSnap.scene.times > 1 ? ` · 第 ${nowSnap.scene.times} 次` : ''}
