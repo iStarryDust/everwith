@@ -223,5 +223,5 @@
 
 MIT。
 
-情绪引擎的原始设计来自 [ChencLi819/dsh-everwith](https://github.com/ChencLi819/dsh-everwith)，
+情绪引擎的原始设计来自 [ChencLi819/dsh-fish-mood](https://github.com/ChencLi819/dsh-fish-mood)，
 这个包在它之上重写了状态推进、反应规则、提示词分层，并加了语音、看屏幕、分条说话和设置面板。
