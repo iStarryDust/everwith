@@ -845,6 +845,8 @@ export function apply(ctx, config = {}) {
             ['maxMinutes', 10, 180],
             ['nightFactor', 2, 20],
             ['dailyLimit', 10, 500],
+            ['speakPerDay', 1, 10],
+            ['speakCooldownMin', 30, 720],
           ]
           for (const [key, lo, hi] of ranges) {
             if (body[key] === undefined) continue
@@ -858,10 +860,6 @@ export function apply(ctx, config = {}) {
           rescheduleScreen?.()
           commit()
           const out = snapshotOf()
-          if (extracted) {
-            out.extract = extracted
-            out.memoryText = readMemory(stateDir)
-          }
           reply(res, 200, out)
         } catch (error) {
           reply(res, 400, { ok: false, error: String(error?.message ?? error) })
@@ -1036,6 +1034,19 @@ export function apply(ctx, config = {}) {
               next.everyMinutes = every
             }
             patch.heartbeat = next
+          }
+          if (body.memory && typeof body.memory === 'object') {
+            const next = { ...(patch.memory ?? {}) }
+            if (typeof body.memory.enabled === 'boolean') {
+              settings.memory = { ...(settings.memory ?? {}), enabled: body.memory.enabled }
+              next.enabled = body.memory.enabled
+            }
+            if (typeof body.memory.prompt === 'string') {
+              const prompt = body.memory.prompt.replace(/\r\n/g, '\n')
+              settings.memory = { ...(settings.memory ?? {}), prompt }
+              next.prompt = prompt
+            }
+            patch.memory = next
           }
           // 从对话提炼:settings 通道带一个 extract 字段,跑到就提炼,结果随响应回去
           if (typeof body.extract === 'string' && body.extract.trim()) {
